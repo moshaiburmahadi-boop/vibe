@@ -1,22 +1,42 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { UserProfile, Contact, ContactRequest } from '../types';
+import {
+  normalizePhoneNumber,
+  getPhoneSearchVariations,
+  getPhoneDigits,
+} from '../utils/phoneUtils';
 
 const LOCAL_CONTACTS_KEY = 'vibe_local_contacts';
 const LOCAL_REQUESTS_KEY = 'vibe_local_contact_requests';
 const LOCAL_PROFILES_KEY = 'vibe_local_profiles';
 
 export const contactService = {
-  // Search user by phone number
+  // Search user by phone number (supports local & international input variations)
   async searchUserByPhone(
     phoneNumber: string,
     currentUserId: string
-  ): Promise<{ profile: UserProfile | null; relationship: 'self' | 'none' | 'contact' | 'request_sent' | 'request_received'; requestId?: string; error: Error | null }> {
-    const cleanPhone = phoneNumber.trim();
+  ): Promise<{
+    profile: UserProfile | null;
+    relationship: 'self' | 'none' | 'contact' | 'request_sent' | 'request_received';
+    requestId?: string;
+    error: Error | null;
+  }> {
+    const normalizedPhone = normalizePhoneNumber(phoneNumber);
+    const searchVariations = getPhoneSearchVariations(phoneNumber);
+    const searchDigits = getPhoneDigits(phoneNumber);
 
     try {
       if (!isSupabaseConfigured()) {
         const profiles: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-        const found = profiles.find((p) => p.phone_number.includes(cleanPhone) || cleanPhone.includes(p.phone_number));
+        const found = profiles.find((p) => {
+          const pNorm = normalizePhoneNumber(p.phone_number);
+          const pDigits = getPhoneDigits(p.phone_number);
+          return (
+            pNorm === normalizedPhone ||
+            searchVariations.includes(p.phone_number) ||
+            (searchDigits.length >= 6 && pDigits.includes(searchDigits))
+          );
+        });
 
         if (!found) {
           return { profile: null, relationship: 'none', error: null };
@@ -29,41 +49,58 @@ export const contactService = {
         // Check contacts
         const contacts: Contact[] = JSON.parse(localStorage.getItem(LOCAL_CONTACTS_KEY) || '[]');
         const isContact = contacts.some(
-          (c) => (c.user_id === currentUserId && c.contact_user_id === found.user_id) ||
-                 (c.user_id === found.user_id && c.contact_user_id === currentUserId)
+          (c) =>
+            (c.user_id === currentUserId && c.contact_user_id === found.user_id) ||
+            (c.user_id === found.user_id && c.contact_user_id === currentUserId)
         );
         if (isContact) return { profile: found, relationship: 'contact', error: null };
 
         // Check requests
         const requests: ContactRequest[] = JSON.parse(localStorage.getItem(LOCAL_REQUESTS_KEY) || '[]');
-        const sent = requests.find((r) => r.sender_id === currentUserId && r.receiver_id === found.user_id && r.status === 'pending');
+        const sent = requests.find(
+          (r) => r.sender_id === currentUserId && r.receiver_id === found.user_id && r.status === 'pending'
+        );
         if (sent) return { profile: found, relationship: 'request_sent', requestId: sent.id, error: null };
 
-        const received = requests.find((r) => r.sender_id === found.user_id && r.receiver_id === currentUserId && r.status === 'pending');
+        const received = requests.find(
+          (r) => r.sender_id === found.user_id && r.receiver_id === currentUserId && r.status === 'pending'
+        );
         if (received) return { profile: found, relationship: 'request_received', requestId: received.id, error: null };
 
         return { profile: found, relationship: 'none', error: null };
       }
 
-      // Supabase query
-      const { data, error } = await supabase
+      // Supabase query matching normalized phone or variations
+      let matchedProfile: UserProfile | null = null;
+
+      // 1. Primary lookup by normalized phone
+      const { data: primaryData } = await supabase
         .from('profiles')
         .select('*')
-        .eq('phone_number', cleanPhone)
+        .eq('phone_number', normalizedPhone)
         .maybeSingle();
 
-      if (error) {
-        return { profile: null, relationship: 'none', error };
+      if (primaryData) {
+        matchedProfile = primaryData as UserProfile;
+      } else {
+        // 2. Secondary lookup across phone variations
+        const { data: variationData } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('phone_number', searchVariations)
+          .limit(1);
+
+        if (variationData && variationData.length > 0) {
+          matchedProfile = variationData[0] as UserProfile;
+        }
       }
 
-      if (!data) {
+      if (!matchedProfile) {
         return { profile: null, relationship: 'none', error: null };
       }
 
-      const targetProfile = data as UserProfile;
-
-      if (targetProfile.user_id === currentUserId) {
-        return { profile: targetProfile, relationship: 'self', error: null };
+      if (matchedProfile.user_id === currentUserId) {
+        return { profile: matchedProfile, relationship: 'self', error: null };
       }
 
       // Check if already in contacts
@@ -71,39 +108,40 @@ export const contactService = {
         .from('contacts')
         .select('id')
         .eq('user_id', currentUserId)
-        .eq('contact_user_id', targetProfile.user_id)
+        .eq('contact_user_id', matchedProfile.user_id)
         .maybeSingle();
 
       if (contactData) {
-        return { profile: targetProfile, relationship: 'contact', error: null };
+        return { profile: matchedProfile, relationship: 'contact', error: null };
       }
 
-      // Check for pending requests
+      // Check for pending requests sent by me
       const { data: sentReq } = await supabase
         .from('contact_requests')
         .select('id')
         .eq('sender_id', currentUserId)
-        .eq('receiver_id', targetProfile.user_id)
+        .eq('receiver_id', matchedProfile.user_id)
         .eq('status', 'pending')
         .maybeSingle();
 
       if (sentReq) {
-        return { profile: targetProfile, relationship: 'request_sent', requestId: sentReq.id, error: null };
+        return { profile: matchedProfile, relationship: 'request_sent', requestId: sentReq.id, error: null };
       }
 
+      // Check for pending requests received by me
       const { data: recReq } = await supabase
         .from('contact_requests')
         .select('id')
-        .eq('sender_id', targetProfile.user_id)
+        .eq('sender_id', matchedProfile.user_id)
         .eq('receiver_id', currentUserId)
         .eq('status', 'pending')
         .maybeSingle();
 
       if (recReq) {
-        return { profile: targetProfile, relationship: 'request_received', requestId: recReq.id, error: null };
+        return { profile: matchedProfile, relationship: 'request_received', requestId: recReq.id, error: null };
       }
 
-      return { profile: targetProfile, relationship: 'none', error: null };
+      return { profile: matchedProfile, relationship: 'none', error: null };
     } catch (err: any) {
       return { profile: null, relationship: 'none', error: err };
     }

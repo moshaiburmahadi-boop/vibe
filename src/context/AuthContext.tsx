@@ -38,7 +38,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [showContactInfo, setShowContactInfo] = useState<boolean>(false);
   const [activeCall, setActiveCall] = useState<CallSession | null>(null);
 
-  // Monitor network status
+  // Monitor online / offline network status
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -52,7 +52,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Initialize session
+  // Initialize session on startup
   const initSession = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -74,12 +74,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     initSession();
 
-    // Listen to Supabase auth changes
+    // Listen to Supabase auth events (SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED, USER_UPDATED)
     if (isSupabaseConfigured()) {
       const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === 'SIGNED_IN' && session?.user) {
+        if (
+          (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') &&
+          session?.user
+        ) {
           const profile = await authService.getProfile(session.user.id);
-          if (profile) setCurrentUser(profile);
+          if (profile) {
+            setCurrentUser(profile);
+          }
         } else if (event === 'SIGNED_OUT') {
           setCurrentUser(null);
           setActiveConversation(null);
@@ -93,7 +98,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [initSession]);
 
-  // Periodic call timer
+  // Periodic active call timer
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (activeCall && activeCall.status === 'connected') {
@@ -108,7 +113,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     const res = await authService.signIn(phone, pass);
     setIsLoading(false);
-    if (res.profile) {
+    if (res.profile && !res.error) {
       setCurrentUser(res.profile);
       await authService.setPresence(res.profile.user_id, true);
     }
@@ -124,7 +129,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     const res = await authService.signUp(params);
     setIsLoading(false);
-    if (res.profile) {
+    if (res.profile && !res.error) {
       setCurrentUser(res.profile);
       await authService.setPresence(res.profile.user_id, true);
     }

@@ -96,6 +96,33 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation ON public.messages(conversa
 CREATE INDEX IF NOT EXISTS idx_message_reads_msg_user ON public.message_reads(message_id, user_id);
 
 -- ==============================================================================
+-- AUTOMATIC PROFILE CREATION TRIGGER ON AUTH.USERS
+-- ==============================================================================
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger AS $$
+BEGIN
+  INSERT INTO public.profiles (user_id, full_name, phone_number, avatar_url, username)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', 'Vibe User'),
+    COALESCE(NEW.raw_user_meta_data->>'phone_number', NEW.phone, NEW.email),
+    COALESCE(NEW.raw_user_meta_data->>'avatar_url', ''),
+    LOWER(REPLACE(COALESCE(NEW.raw_user_meta_data->>'full_name', 'user'), ' ', '_')) || '_' || FLOOR(RANDOM() * 900 + 100)::text
+  )
+  ON CONFLICT (user_id) DO UPDATE SET
+    full_name = EXCLUDED.full_name,
+    phone_number = EXCLUDED.phone_number,
+    avatar_url = EXCLUDED.avatar_url;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- ==============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- ==============================================================================
 
