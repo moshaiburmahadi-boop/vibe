@@ -1,0 +1,6 @@
+{
+  "name": "Vibe - Premium Messaging",
+  "description": "A high-performance, real-time messaging PWA with Supabase backend, voice notes, media sharing, and contact management.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
