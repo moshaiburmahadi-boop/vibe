@@ -13,17 +13,13 @@ const getInitialConfig = () => {
   const localUrl = typeof window !== 'undefined' ? localStorage.getItem('vibe_supabase_url') || '' : '';
   const localKey = typeof window !== 'undefined' ? localStorage.getItem('vibe_supabase_anon_key') || '' : '';
 
-  const url = localUrl || (envUrl && !envUrl.includes('your-project') ? envUrl : '') || DEFAULT_SUPABASE_URL;
-  const key = localKey || (envKey && !envKey.includes('your-anon') ? envKey : '') || DEFAULT_SUPABASE_ANON_KEY;
+  const isInvalidUrl = (u: string) => !u || u.includes('your-project') || u.includes('mkeyppmjkrmpbxwmioyi') || u.includes('demo-project');
+  const isInvalidKey = (k: string) => !k || k.includes('your-anon') || k.includes('demo-anon');
 
-  const isConfigured = Boolean(
-    url &&
-    key &&
-    !url.includes('demo-project') &&
-    !key.includes('demo-anon') &&
-    !url.includes('your-project') &&
-    !key.includes('your-anon')
-  );
+  const url = (!isInvalidUrl(localUrl) ? localUrl : '') || (!isInvalidUrl(envUrl) ? envUrl : '') || DEFAULT_SUPABASE_URL;
+  const key = (!isInvalidKey(localKey) ? localKey : '') || (!isInvalidKey(envKey) ? envKey : '') || DEFAULT_SUPABASE_ANON_KEY;
+
+  const isConfigured = Boolean(url && key && !isInvalidUrl(url) && !isInvalidKey(key));
 
   return { url, key, isConfigured };
 };
@@ -55,16 +51,13 @@ export const getSupabaseConfig = () => {
   const localUrl = typeof window !== 'undefined' ? localStorage.getItem('vibe_supabase_url') || '' : '';
   const localKey = typeof window !== 'undefined' ? localStorage.getItem('vibe_supabase_anon_key') || '' : '';
 
-  const url = localUrl || (envUrl && !envUrl.includes('your-project') ? envUrl : '') || DEFAULT_SUPABASE_URL;
-  const key = localKey || (envKey && !envKey.includes('your-anon') ? envKey : '') || DEFAULT_SUPABASE_ANON_KEY;
-  const isConfigured = Boolean(
-    url &&
-    key &&
-    !url.includes('demo-project') &&
-    !key.includes('demo-anon') &&
-    !url.includes('your-project') &&
-    !key.includes('your-anon')
-  );
+  const isInvalidUrl = (u: string) => !u || u.includes('your-project') || u.includes('mkeyppmjkrmpbxwmioyi') || u.includes('demo-project');
+  const isInvalidKey = (k: string) => !k || k.includes('your-anon') || k.includes('demo-anon');
+
+  const url = (!isInvalidUrl(localUrl) ? localUrl : '') || (!isInvalidUrl(envUrl) ? envUrl : '') || DEFAULT_SUPABASE_URL;
+  const key = (!isInvalidKey(localKey) ? localKey : '') || (!isInvalidKey(envKey) ? envKey : '') || DEFAULT_SUPABASE_ANON_KEY;
+
+  const isConfigured = Boolean(url && key && !isInvalidUrl(url) && !isInvalidKey(key));
 
   return { url, key, isConfigured };
 };
