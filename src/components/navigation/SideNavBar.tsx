@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { ActiveTab } from '../../types';
+import { ConfirmationModal } from '../common/ConfirmationModal';
 
 export const SideNavBar: React.FC = () => {
-  const { activeTab, setActiveTab, currentUser } = useAuth();
+  const { activeTab, setActiveTab, currentUser, signOut } = useAuth();
+  const [showSignOutModal, setShowSignOutModal] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   const navItems: { id: ActiveTab; label: string; icon: string }[] = [
     { id: 'chats', label: 'Chats', icon: 'chat' },
@@ -47,33 +50,65 @@ export const SideNavBar: React.FC = () => {
         })}
       </ul>
 
-      {/* Bottom User Profile Area */}
-      <div
-        onClick={() => setActiveTab('settings')}
-        className="px-4 mt-auto pt-4 border-t border-outline-variant flex items-center gap-3 cursor-pointer hover:bg-surface-container-high transition-colors py-2 rounded-xl mx-3"
-      >
-        <div className="relative w-10 h-10 shrink-0">
-          <img
-            src={
-              currentUser?.avatar_url ||
-              `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                currentUser?.full_name || 'User'
-              )}`
-            }
-            alt={currentUser?.full_name || 'My Profile'}
-            className="w-full h-full object-cover rounded-full shadow-sm border border-outline-variant/60"
-          />
-          <div className="absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-surface bg-tertiary-fixed-dim"></div>
+      {/* Bottom User Profile Area & Quick Sign Out */}
+      <div className="px-3 mt-auto pt-3 border-t border-outline-variant flex items-center justify-between gap-2">
+        <div
+          onClick={() => setActiveTab('settings')}
+          className="flex-1 flex items-center gap-2.5 cursor-pointer hover:bg-surface-container-high transition-colors p-2 rounded-xl min-w-0"
+        >
+          <div className="relative w-9 h-9 shrink-0">
+            <img
+              src={
+                currentUser?.avatar_url ||
+                `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+                  currentUser?.full_name || 'User'
+                )}`
+              }
+              alt={currentUser?.full_name || 'My Profile'}
+              className="w-full h-full object-cover rounded-full shadow-sm border border-outline-variant/60"
+            />
+            <div className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-surface bg-tertiary-fixed-dim"></div>
+          </div>
+          <div className="flex flex-col overflow-hidden min-w-0">
+            <span className="text-xs font-semibold text-on-surface truncate">
+              {currentUser?.full_name || 'My Profile'}
+            </span>
+            <span className="text-[11px] text-on-surface-variant truncate font-mono">
+              {currentUser?.phone_number || 'Online'}
+            </span>
+          </div>
         </div>
-        <div className="flex flex-col overflow-hidden min-w-0">
-          <span className="text-sm font-semibold text-on-surface truncate">
-            {currentUser?.full_name || 'My Profile'}
-          </span>
-          <span className="text-xs text-on-surface-variant truncate">
-            {currentUser?.phone_number || 'Online'}
-          </span>
-        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowSignOutModal(true)}
+          title="Sign out"
+          className="w-9 h-9 rounded-xl flex items-center justify-center text-outline hover:text-error hover:bg-error-container/20 transition-all shrink-0 active:scale-95"
+        >
+          <span className="material-symbols-outlined text-lg">logout</span>
+        </button>
       </div>
+
+      {/* Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={showSignOutModal}
+        title="Sign Out"
+        message="Are you sure you want to sign out? You can sign back in anytime with your phone number."
+        confirmText="Sign Out"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        isLoading={isSigningOut}
+        onConfirm={async () => {
+          setIsSigningOut(true);
+          try {
+            await signOut();
+          } finally {
+            setIsSigningOut(false);
+            setShowSignOutModal(false);
+          }
+        }}
+        onCancel={() => setShowSignOutModal(false)}
+      />
     </nav>
   );
 };

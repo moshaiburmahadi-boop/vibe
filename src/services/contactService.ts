@@ -6,12 +6,8 @@ import {
   getPhoneDigits,
 } from '../utils/phoneUtils';
 
-const LOCAL_CONTACTS_KEY = 'vibe_local_contacts';
-const LOCAL_REQUESTS_KEY = 'vibe_local_contact_requests';
-const LOCAL_PROFILES_KEY = 'vibe_local_profiles';
-
 export const contactService = {
-  // Search user by phone number (supports local & international input variations)
+  // Search user globally in Supabase profiles by phone number
   async searchUserByPhone(
     phoneNumber: string,
     currentUserId: string
@@ -25,56 +21,19 @@ export const contactService = {
     const searchVariations = getPhoneSearchVariations(phoneNumber);
     const searchDigits = getPhoneDigits(phoneNumber);
 
+    if (!isSupabaseConfigured()) {
+      return {
+        profile: null,
+        relationship: 'none',
+        error: new Error('Supabase is not configured. Please configure your Supabase backend to enable global search.'),
+      };
+    }
+
     try {
-      if (!isSupabaseConfigured()) {
-        const profiles: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-        const found = profiles.find((p) => {
-          const pNorm = normalizePhoneNumber(p.phone_number);
-          const pDigits = getPhoneDigits(p.phone_number);
-          return (
-            pNorm === normalizedPhone ||
-            searchVariations.includes(p.phone_number) ||
-            (searchDigits.length >= 6 && pDigits.includes(searchDigits))
-          );
-        });
-
-        if (!found) {
-          return { profile: null, relationship: 'none', error: null };
-        }
-
-        if (found.user_id === currentUserId) {
-          return { profile: found, relationship: 'self', error: null };
-        }
-
-        // Check contacts
-        const contacts: Contact[] = JSON.parse(localStorage.getItem(LOCAL_CONTACTS_KEY) || '[]');
-        const isContact = contacts.some(
-          (c) =>
-            (c.user_id === currentUserId && c.contact_user_id === found.user_id) ||
-            (c.user_id === found.user_id && c.contact_user_id === currentUserId)
-        );
-        if (isContact) return { profile: found, relationship: 'contact', error: null };
-
-        // Check requests
-        const requests: ContactRequest[] = JSON.parse(localStorage.getItem(LOCAL_REQUESTS_KEY) || '[]');
-        const sent = requests.find(
-          (r) => r.sender_id === currentUserId && r.receiver_id === found.user_id && r.status === 'pending'
-        );
-        if (sent) return { profile: found, relationship: 'request_sent', requestId: sent.id, error: null };
-
-        const received = requests.find(
-          (r) => r.sender_id === found.user_id && r.receiver_id === currentUserId && r.status === 'pending'
-        );
-        if (received) return { profile: found, relationship: 'request_received', requestId: received.id, error: null };
-
-        return { profile: found, relationship: 'none', error: null };
-      }
-
-      // Supabase query matching normalized phone or variations
+      // 1. Primary lookup by exact normalized phone
       let matchedProfile: UserProfile | null = null;
 
-      // 1. Primary lookup by normalized phone
-      const { data: primaryData } = await supabase
+      const { data: primaryData, error: primaryErr } = await supabase
         .from('profiles')
         .select('*')
         .eq('phone_number', normalizedPhone)
@@ -82,8 +41,8 @@ export const contactService = {
 
       if (primaryData) {
         matchedProfile = primaryData as UserProfile;
-      } else {
-        // 2. Secondary lookup across phone variations
+      } else if (searchVariations.length > 0) {
+        // 2. Secondary lookup across phone format variations
         const { data: variationData } = await supabase
           .from('profiles')
           .select('*')
@@ -92,6 +51,19 @@ export const contactService = {
 
         if (variationData && variationData.length > 0) {
           matchedProfile = variationData[0] as UserProfile;
+        }
+      }
+
+      // 3. Digits-based fallback match if no match found yet
+      if (!matchedProfile && searchDigits.length >= 7) {
+        const { data: fuzzyData } = await supabase
+          .from('profiles')
+          .select('*')
+          .ilike('phone_number', `%${searchDigits}%`)
+          .limit(1);
+
+        if (fuzzyData && fuzzyData.length > 0) {
+          matchedProfile = fuzzyData[0] as UserProfile;
         }
       }
 
@@ -107,8 +79,7 @@ export const contactService = {
       const { data: contactData } = await supabase
         .from('contacts')
         .select('id')
-        .eq('user_id', currentUserId)
-        .eq('contact_user_id', matchedProfile.user_id)
+        .or(`and(user_id.eq.${currentUserId},contact_user_id.eq.${matchedProfile.user_id}),and(user_id.eq.${matchedProfile.user_id},contact_user_id.eq.${currentUserId})`)
         .maybeSingle();
 
       if (contactData) {
@@ -147,20 +118,11 @@ export const contactService = {
     }
   },
 
-  // Get user's contacts with their profiles
+  // Get user's contacts with their profiles from Supabase
   async getContacts(userId: string): Promise<Contact[]> {
+    if (!isSupabaseConfigured()) return [];
+
     try {
-      if (!isSupabaseConfigured()) {
-        const contacts: Contact[] = JSON.parse(localStorage.getItem(LOCAL_CONTACTS_KEY) || '[]');
-        const userContacts = contacts.filter((c) => c.user_id === userId);
-        const profiles: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-
-        return userContacts.map((c) => ({
-          ...c,
-          profile: profiles.find((p) => p.user_id === c.contact_user_id),
-        }));
-      }
-
       const { data, error } = await supabase
         .from('contacts')
         .select(`
@@ -193,30 +155,11 @@ export const contactService = {
     }
   },
 
-  // Get received & sent contact requests
+  // Get received & sent contact requests from Supabase
   async getContactRequests(userId: string): Promise<{ received: ContactRequest[]; sent: ContactRequest[] }> {
+    if (!isSupabaseConfigured()) return { received: [], sent: [] };
+
     try {
-      if (!isSupabaseConfigured()) {
-        const requests: ContactRequest[] = JSON.parse(localStorage.getItem(LOCAL_REQUESTS_KEY) || '[]');
-        const profiles: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-
-        const received = requests
-          .filter((r) => r.receiver_id === userId && r.status === 'pending')
-          .map((r) => ({
-            ...r,
-            sender_profile: profiles.find((p) => p.user_id === r.sender_id),
-          }));
-
-        const sent = requests
-          .filter((r) => r.sender_id === userId && r.status === 'pending')
-          .map((r) => ({
-            ...r,
-            receiver_profile: profiles.find((p) => p.user_id === r.receiver_id),
-          }));
-
-        return { received, sent };
-      }
-
       const { data: receivedData } = await supabase
         .from('contact_requests')
         .select('*')
@@ -256,28 +199,17 @@ export const contactService = {
     }
   },
 
-  // Send contact request
+  // Send contact request in Supabase
   async sendContactRequest(senderId: string, receiverId: string): Promise<{ error: Error | null }> {
+    if (senderId === receiverId) {
+      return { error: new Error('You cannot add yourself as a contact') };
+    }
+
+    if (!isSupabaseConfigured()) {
+      return { error: new Error('Supabase is not configured') };
+    }
+
     try {
-      if (senderId === receiverId) {
-        return { error: new Error('You cannot add yourself as a contact') };
-      }
-
-      if (!isSupabaseConfigured()) {
-        const requests: ContactRequest[] = JSON.parse(localStorage.getItem(LOCAL_REQUESTS_KEY) || '[]');
-        const newReq: ContactRequest = {
-          id: `req_${Date.now()}`,
-          sender_id: senderId,
-          receiver_id: receiverId,
-          status: 'pending',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-        requests.push(newReq);
-        localStorage.setItem(LOCAL_REQUESTS_KEY, JSON.stringify(requests));
-        return { error: null };
-      }
-
       const { error } = await supabase.from('contact_requests').insert({
         sender_id: senderId,
         receiver_id: receiverId,
@@ -297,28 +229,11 @@ export const contactService = {
     senderId: string,
     receiverId: string
   ): Promise<{ error: Error | null }> {
+    if (!isSupabaseConfigured()) {
+      return { error: new Error('Supabase is not configured') };
+    }
+
     try {
-      if (!isSupabaseConfigured()) {
-        const requests: ContactRequest[] = JSON.parse(localStorage.getItem(LOCAL_REQUESTS_KEY) || '[]');
-        const idx = requests.findIndex((r) => r.id === requestId);
-        if (idx !== -1) {
-          requests[idx].status = status;
-          requests[idx].updated_at = new Date().toISOString();
-          localStorage.setItem(LOCAL_REQUESTS_KEY, JSON.stringify(requests));
-        }
-
-        if (status === 'accepted') {
-          const contacts: Contact[] = JSON.parse(localStorage.getItem(LOCAL_CONTACTS_KEY) || '[]');
-          contacts.push(
-            { id: `c_${Date.now()}_1`, user_id: receiverId, contact_user_id: senderId, created_at: new Date().toISOString() },
-            { id: `c_${Date.now()}_2`, user_id: senderId, contact_user_id: receiverId, created_at: new Date().toISOString() }
-          );
-          localStorage.setItem(LOCAL_CONTACTS_KEY, JSON.stringify(contacts));
-        }
-
-        return { error: null };
-      }
-
       const { error: updateErr } = await supabase
         .from('contact_requests')
         .update({ status, updated_at: new Date().toISOString() })
@@ -327,11 +242,11 @@ export const contactService = {
       if (updateErr) return { error: updateErr };
 
       if (status === 'accepted') {
-        // Add mutual contact rows
+        // Add mutual contact rows in Supabase contacts table
         await supabase.from('contacts').upsert([
           { user_id: receiverId, contact_user_id: senderId },
           { user_id: senderId, contact_user_id: receiverId },
-        ]);
+        ], { onConflict: 'user_id,contact_user_id' });
       }
 
       return { error: null };
@@ -340,19 +255,13 @@ export const contactService = {
     }
   },
 
-  // Remove contact
+  // Remove contact from Supabase
   async removeContact(userId: string, contactUserId: string): Promise<{ error: Error | null }> {
-    try {
-      if (!isSupabaseConfigured()) {
-        let contacts: Contact[] = JSON.parse(localStorage.getItem(LOCAL_CONTACTS_KEY) || '[]');
-        contacts = contacts.filter(
-          (c) => !(c.user_id === userId && c.contact_user_id === contactUserId) &&
-                 !(c.user_id === contactUserId && c.contact_user_id === userId)
-        );
-        localStorage.setItem(LOCAL_CONTACTS_KEY, JSON.stringify(contacts));
-        return { error: null };
-      }
+    if (!isSupabaseConfigured()) {
+      return { error: new Error('Supabase is not configured') };
+    }
 
+    try {
       const { error } = await supabase
         .from('contacts')
         .delete()

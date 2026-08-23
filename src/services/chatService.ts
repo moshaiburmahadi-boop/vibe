@@ -1,52 +1,12 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { Conversation, Message, MessageType, UserProfile } from '../types';
 
-const LOCAL_CONVS_KEY = 'vibe_local_conversations';
-const LOCAL_MSGS_KEY = 'vibe_local_messages';
-const LOCAL_READS_KEY = 'vibe_local_reads';
-const LOCAL_PROFILES_KEY = 'vibe_local_profiles';
-
 export const chatService = {
   // Get all conversations for a user
   async getConversations(userId: string): Promise<Conversation[]> {
+    if (!isSupabaseConfigured() || !userId) return [];
+
     try {
-      if (!isSupabaseConfigured()) {
-        const convs: Conversation[] = JSON.parse(localStorage.getItem(LOCAL_CONVS_KEY) || '[]');
-        const msgs: Message[] = JSON.parse(localStorage.getItem(LOCAL_MSGS_KEY) || '[]');
-        const reads: { messageId: string; userId: string }[] = JSON.parse(localStorage.getItem(LOCAL_READS_KEY) || '[]');
-        const profiles: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-
-        // Filter convs where user is member
-        const userConvs = convs.filter((c) => c.members.some((m) => m.user_id === userId));
-
-        return userConvs.map((conv) => {
-          // Other member
-          const otherMember = conv.members.find((m) => m.user_id !== userId);
-          const otherProfile = otherMember?.profile || profiles.find((p) => p.user_id === otherMember?.user_id);
-
-          // Last message
-          const convMsgs = msgs.filter((m) => m.conversation_id === conv.id);
-          convMsgs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-          const lastMessage = convMsgs[0] || null;
-
-          // Unread count
-          const unreadCount = convMsgs.filter(
-            (m) => m.sender_id !== userId && !reads.some((r) => r.messageId === m.id && r.userId === userId)
-          ).length;
-
-          return {
-            ...conv,
-            other_member: otherProfile,
-            last_message: lastMessage,
-            unread_count: unreadCount,
-          };
-        }).sort((a, b) => {
-          const timeA = a.last_message ? new Date(a.last_message.created_at).getTime() : new Date(a.created_at).getTime();
-          const timeB = b.last_message ? new Date(b.last_message.created_at).getTime() : new Date(b.created_at).getTime();
-          return timeB - timeA;
-        });
-      }
-
       // Step 1: Find conversation IDs user belongs to
       const { data: memberRows, error: memberErr } = await supabase
         .from('conversation_members')
@@ -103,14 +63,6 @@ export const chatService = {
             .limit(1)
             .maybeSingle();
 
-          // Get unread count
-          const { count } = await supabase
-            .from('messages')
-            .select('id', { count: 'exact', head: true })
-            .eq('conversation_id', conv.id)
-            .neq('sender_id', userId)
-            .is('is_deleted', false);
-
           // Check reads for unread count calculation
           const { data: reads } = await supabase
             .from('message_reads')
@@ -154,46 +106,12 @@ export const chatService = {
     currentUserId: string,
     targetUserId: string
   ): Promise<{ conversation: Conversation | null; error: Error | null }> {
+    if (!isSupabaseConfigured()) {
+      return { conversation: null, error: new Error('Supabase not configured') };
+    }
+
     try {
-      if (!isSupabaseConfigured()) {
-        const convs: Conversation[] = JSON.parse(localStorage.getItem(LOCAL_CONVS_KEY) || '[]');
-        const profiles: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-
-        // Check if direct conversation exists
-        let existing = convs.find(
-          (c) =>
-            c.conversation_type === 'direct' &&
-            c.members.some((m) => m.user_id === currentUserId) &&
-            c.members.some((m) => m.user_id === targetUserId)
-        );
-
-        if (existing) {
-          const otherProfile = profiles.find((p) => p.user_id === targetUserId);
-          return { conversation: { ...existing, other_member: otherProfile }, error: null };
-        }
-
-        const newId = `conv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-        const myProfile = profiles.find((p) => p.user_id === currentUserId);
-        const targetProfile = profiles.find((p) => p.user_id === targetUserId);
-
-        const newConv: Conversation = {
-          id: newId,
-          conversation_type: 'direct',
-          created_at: new Date().toISOString(),
-          members: [
-            { id: `mem_1_${Date.now()}`, conversation_id: newId, user_id: currentUserId, joined_at: new Date().toISOString(), profile: myProfile },
-            { id: `mem_2_${Date.now()}`, conversation_id: newId, user_id: targetUserId, joined_at: new Date().toISOString(), profile: targetProfile },
-          ],
-          other_member: targetProfile,
-          unread_count: 0,
-        };
-
-        convs.push(newConv);
-        localStorage.setItem(LOCAL_CONVS_KEY, JSON.stringify(convs));
-        return { conversation: newConv, error: null };
-      }
-
-      // Supabase lookup
+      // Step 1: Check if a direct conversation already exists between currentUserId and targetUserId
       const { data: myConvs } = await supabase
         .from('conversation_members')
         .select('conversation_id')
@@ -233,7 +151,7 @@ export const chatService = {
         }
       }
 
-      // Create new conversation
+      // Step 2: Create new conversation in Supabase
       const { data: newConvData, error: convError } = await supabase
         .from('conversations')
         .insert({ conversation_type: 'direct' })
@@ -244,7 +162,7 @@ export const chatService = {
         return { conversation: null, error: convError };
       }
 
-      // Add members
+      // Step 3: Add members to conversation
       await supabase.from('conversation_members').insert([
         { conversation_id: newConvData.id, user_id: currentUserId },
         { conversation_id: newConvData.id, user_id: targetUserId },
@@ -271,14 +189,9 @@ export const chatService = {
 
   // Get messages for conversation
   async getMessages(conversationId: string, limit = 50): Promise<Message[]> {
-    try {
-      if (!isSupabaseConfigured()) {
-        const msgs: Message[] = JSON.parse(localStorage.getItem(LOCAL_MSGS_KEY) || '[]');
-        const convMsgs = msgs.filter((m) => m.conversation_id === conversationId);
-        convMsgs.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-        return convMsgs;
-      }
+    if (!isSupabaseConfigured() || !conversationId) return [];
 
+    try {
       const { data, error } = await supabase
         .from('messages')
         .select('*')
@@ -298,8 +211,8 @@ export const chatService = {
 
       return data.map((m) => ({
         ...m,
-        sender: profileMap.get(m.sender_id),
-      }));
+        sender_profile: profileMap.get(m.sender_id),
+      })) as Message[];
     } catch (err) {
       return [];
     }
@@ -309,72 +222,45 @@ export const chatService = {
   async sendMessage(params: {
     conversationId: string;
     senderId: string;
-    messageType: MessageType;
-    content: string | null;
-    fileUrl?: string | null;
-    fileName?: string | null;
-    fileSize?: string | null;
-    durationSeconds?: number | null;
-    replyToMessageId?: string | null;
+    content?: string;
+    messageType?: MessageType;
+    fileUrl?: string;
+    fileName?: string;
+    fileSize?: string;
+    durationSeconds?: number;
+    replyToMessageId?: string;
   }): Promise<{ message: Message | null; error: Error | null }> {
-    const {
-      conversationId,
-      senderId,
-      messageType,
-      content,
-      fileUrl,
-      fileName,
-      fileSize,
-      durationSeconds,
-      replyToMessageId,
-    } = params;
+    if (!isSupabaseConfigured()) {
+      return { message: null, error: new Error('Supabase not configured') };
+    }
 
     try {
-      if (!isSupabaseConfigured()) {
-        const msgs: Message[] = JSON.parse(localStorage.getItem(LOCAL_MSGS_KEY) || '[]');
-        const profiles: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-
-        const newMsg: Message = {
-          id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          conversation_id: conversationId,
-          sender_id: senderId,
-          message_type: messageType,
-          content,
-          file_url: fileUrl || null,
-          file_name: fileName || null,
-          file_size: fileSize || null,
-          duration_seconds: durationSeconds || null,
-          reply_to_message_id: replyToMessageId || null,
-          is_deleted: false,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          sender: profiles.find((p) => p.user_id === senderId),
-          status: 'sent',
-        };
-
-        msgs.push(newMsg);
-        localStorage.setItem(LOCAL_MSGS_KEY, JSON.stringify(msgs));
-        return { message: newMsg, error: null };
-      }
+      const newMsg = {
+        conversation_id: params.conversationId,
+        sender_id: params.senderId,
+        message_type: params.messageType || 'text',
+        content: params.content || '',
+        file_url: params.fileUrl || null,
+        file_name: params.fileName || null,
+        file_size: params.fileSize || null,
+        duration_seconds: params.durationSeconds || null,
+        reply_to_message_id: params.replyToMessageId || null,
+        is_deleted: false,
+      };
 
       const { data, error } = await supabase
         .from('messages')
-        .insert({
-          conversation_id: conversationId,
-          sender_id: senderId,
-          message_type: messageType,
-          content,
-          file_url: fileUrl || null,
-          file_name: fileName || null,
-          file_size: fileSize || null,
-          duration_seconds: durationSeconds || null,
-          reply_to_message_id: replyToMessageId || null,
-          is_deleted: false,
-        })
+        .insert(newMsg)
         .select()
         .single();
 
-      if (error || !data) return { message: null, error };
+      if (error) return { message: null, error };
+
+      // Update conversation updated_at
+      await supabase
+        .from('conversations')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', params.conversationId);
 
       return { message: data as Message, error: null };
     } catch (err: any) {
@@ -382,24 +268,12 @@ export const chatService = {
     }
   },
 
-  // Mark all messages in a conversation as read by a user
+  // Mark messages in conversation as read
   async markConversationAsRead(conversationId: string, userId: string): Promise<void> {
+    if (!isSupabaseConfigured() || !conversationId || !userId) return;
+
     try {
-      if (!isSupabaseConfigured()) {
-        const msgs: Message[] = JSON.parse(localStorage.getItem(LOCAL_MSGS_KEY) || '[]');
-        const reads: { messageId: string; userId: string }[] = JSON.parse(localStorage.getItem(LOCAL_READS_KEY) || '[]');
-
-        const unreadMsgs = msgs.filter((m) => m.conversation_id === conversationId && m.sender_id !== userId);
-        for (const msg of unreadMsgs) {
-          if (!reads.some((r) => r.messageId === msg.id && r.userId === userId)) {
-            reads.push({ messageId: msg.id, userId });
-          }
-        }
-        localStorage.setItem(LOCAL_READS_KEY, JSON.stringify(reads));
-        return;
-      }
-
-      // Fetch unread messages
+      // Find unread messages not sent by me
       const { data: unreadMsgs } = await supabase
         .from('messages')
         .select('id')
@@ -413,26 +287,21 @@ export const chatService = {
         user_id: userId,
       }));
 
-      await supabase.from('message_reads').upsert(readsToInsert, { onConflict: 'message_id,user_id' });
+      await supabase.from('message_reads').upsert(readsToInsert, {
+        onConflict: 'message_id,user_id',
+      });
     } catch (err) {
-      // ignore
+      // Non-blocking
     }
   },
 
-  // Soft delete a message
+  // Delete message (soft delete)
   async deleteMessage(messageId: string, userId: string): Promise<{ error: Error | null }> {
-    try {
-      if (!isSupabaseConfigured()) {
-        const msgs: Message[] = JSON.parse(localStorage.getItem(LOCAL_MSGS_KEY) || '[]');
-        const idx = msgs.findIndex((m) => m.id === messageId);
-        if (idx !== -1 && msgs[idx].sender_id === userId) {
-          msgs[idx].is_deleted = true;
-          msgs[idx].content = 'This message was deleted';
-          localStorage.setItem(LOCAL_MSGS_KEY, JSON.stringify(msgs));
-        }
-        return { error: null };
-      }
+    if (!isSupabaseConfigured()) {
+      return { error: new Error('Supabase not configured') };
+    }
 
+    try {
       const { error } = await supabase
         .from('messages')
         .update({ is_deleted: true, content: 'This message was deleted' })

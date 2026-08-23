@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storageService';
 import { isSupabaseConfigured, getSupabaseConfig, setSupabaseConfig } from '../../lib/supabase';
+import { ConfirmationModal } from '../common/ConfirmationModal';
 
 export const SettingsView: React.FC = () => {
   const { currentUser, updateProfile, signOut } = useAuth();
@@ -10,6 +11,8 @@ export const SettingsView: React.FC = () => {
   const [about, setAbout] = useState(currentUser?.about || 'Hey there! I am using Vibe.');
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showSignOutModal, setShowSignOutModal] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   // Supabase Config form
   const [customUrl, setCustomUrl] = useState(getSupabaseConfig().url);
@@ -255,16 +258,34 @@ export const SettingsView: React.FC = () => {
 
         {/* Sign Out */}
         <button
-          onClick={() => {
-            if (confirm('Are you sure you want to sign out?')) {
-              signOut();
-            }
-          }}
-          className="w-full py-3.5 px-4 rounded-full border border-error text-error hover:bg-error-container/20 font-bold text-sm transition-all active:scale-98 shadow-sm flex items-center justify-center gap-2"
+          type="button"
+          onClick={() => setShowSignOutModal(true)}
+          className="w-full py-3.5 px-4 rounded-full border border-error text-error hover:bg-error-container/20 font-bold text-sm transition-all active:scale-98 shadow-sm flex items-center justify-center gap-2 cursor-pointer"
         >
           <span className="material-symbols-outlined text-lg">logout</span>
           Sign Out of Vibe
         </button>
+
+        {/* Confirmation Modal */}
+        <ConfirmationModal
+          isOpen={showSignOutModal}
+          title="Sign Out"
+          message="Are you sure you want to sign out of this device? You can sign back in anytime with your phone number and password."
+          confirmText="Sign Out"
+          cancelText="Cancel"
+          confirmVariant="danger"
+          isLoading={isSigningOut}
+          onConfirm={async () => {
+            setIsSigningOut(true);
+            try {
+              await signOut();
+            } finally {
+              setIsSigningOut(false);
+              setShowSignOutModal(false);
+            }
+          }}
+          onCancel={() => setShowSignOutModal(false)}
+        />
       </main>
     </div>
   );

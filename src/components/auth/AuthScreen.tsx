@@ -19,7 +19,7 @@ export const AuthScreen: React.FC = () => {
   const [rememberMe, setRememberMe] = useState(true);
 
   // Backend config drawer
-  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [showConfigModal, setShowConfigModal] = useState(!isSupabaseConfigured());
   const [customUrl, setCustomUrl] = useState(getSupabaseConfig().url);
   const [customKey, setCustomKey] = useState(getSupabaseConfig().key);
   const [configSuccess, setConfigSuccess] = useState(false);
@@ -89,7 +89,7 @@ export const AuthScreen: React.FC = () => {
   const handleSaveConfig = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customUrl || !customKey) return;
-    setSupabaseConfig(customUrl, customKey);
+    setSupabaseConfig(customUrl.trim(), customKey.trim());
     setConfigSuccess(true);
     setTimeout(() => {
       setConfigSuccess(false);
@@ -102,15 +102,35 @@ export const AuthScreen: React.FC = () => {
     <div className="bg-surface text-on-surface min-h-screen w-full flex flex-col items-center justify-center p-4 md:p-8 font-inter overflow-y-auto">
       <main className="w-full max-w-md my-auto">
         {/* Logo & Subtitle */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary text-on-primary mb-4 shadow-lg shadow-primary/20">
             <span className="material-symbols-outlined text-4xl fill" style={{ fontVariationSettings: "'FILL' 1" }}>
               forum
             </span>
           </div>
           <h1 className="text-3xl md:text-5xl font-bold text-primary tracking-tight mb-2">Vibe</h1>
-          <p className="text-base text-on-surface-variant">Connect. Chat. Stay Close.</p>
+          <p className="text-base text-on-surface-variant">Global Cross-Device Chat & Presence</p>
         </div>
+
+        {/* Global Connection Warning if unconfigured */}
+        {!isSupabaseConfigured() && (
+          <div className="mb-4 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs flex items-start gap-3">
+            <span className="material-symbols-outlined text-xl text-amber-600 shrink-0">cloud_off</span>
+            <div className="flex-1">
+              <p className="font-semibold mb-1">Supabase Backend Setup Required</p>
+              <p className="opacity-90 mb-2">
+                Connect your Supabase project to enable global accounts across PC, mobile, and PWA with real-time sync.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowConfigModal(true)}
+                className="px-3 py-1 rounded-full bg-amber-600 text-white font-semibold text-[11px] hover:bg-amber-700 transition-colors"
+              >
+                Connect Supabase Project
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Card */}
         <div className="bg-surface-container-lowest rounded-2xl shadow-xl border border-outline-variant/40 p-6 md:p-8 backdrop-blur-sm">
@@ -169,7 +189,7 @@ export const AuthScreen: React.FC = () => {
                       type="text"
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
-                      placeholder="e.g. Sarah Jenkins"
+                      placeholder="e.g. Mahadi Hasan"
                       required
                       className="block w-full pl-11 pr-4 py-3 border border-outline-variant rounded-full text-base bg-surface text-on-surface focus:ring-2 focus:ring-primary focus:border-primary transition-all outline-none"
                     />
@@ -211,11 +231,14 @@ export const AuthScreen: React.FC = () => {
                   type="tel"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+1 (555) 000-0000"
+                  placeholder="017XXXXXXXX or +88017XXXXXXXX"
                   required
                   className="block w-full pl-11 pr-4 py-3 border border-outline-variant rounded-full text-base bg-surface text-on-surface focus:ring-2 focus:ring-primary focus:border-primary transition-all outline-none"
                 />
               </div>
+              <p className="mt-1 text-[11px] text-on-surface-variant/80 pl-2">
+                All formats (e.g. 017... or +88017...) normalize automatically.
+              </p>
             </div>
 
             {/* Password */}
@@ -224,15 +247,6 @@ export const AuthScreen: React.FC = () => {
                 <label className="block text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
                   Password
                 </label>
-                {!isSignUp && (
-                  <button
-                    type="button"
-                    onClick={() => alert('Please contact administrator to reset your password or sign in with your phone credentials.')}
-                    className="text-xs font-medium text-primary hover:text-primary-container transition-colors"
-                  >
-                    Forgot Password?
-                  </button>
-                )}
               </div>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-outline pointer-events-none">
@@ -312,7 +326,6 @@ export const AuthScreen: React.FC = () => {
             </div>
           </form>
 
-          {/* Quick Demo Switcher helper */}
           <div className="mt-6 pt-4 border-t border-outline-variant/30 text-center">
             <p className="text-xs text-on-surface-variant">
               {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
@@ -330,7 +343,7 @@ export const AuthScreen: React.FC = () => {
           </div>
         </div>
 
-        {/* Backend / Supabase status badge */}
+        {/* Backend status badge */}
         <div className="mt-6 flex justify-center items-center gap-2">
           <button
             type="button"
@@ -339,10 +352,10 @@ export const AuthScreen: React.FC = () => {
           >
             <span
               className={`w-2 h-2 rounded-full ${
-                isSupabaseConfigured() ? 'bg-tertiary-fixed-dim' : 'bg-secondary'
+                isSupabaseConfigured() ? 'bg-green-500' : 'bg-amber-500'
               }`}
             ></span>
-            <span>{isSupabaseConfigured() ? 'Supabase Connected' : 'Supabase Backend Config'}</span>
+            <span>{isSupabaseConfigured() ? 'Supabase Connected' : 'Configure Supabase Backend'}</span>
             <span className="material-symbols-outlined text-[14px]">tune</span>
           </button>
         </div>
@@ -355,7 +368,7 @@ export const AuthScreen: React.FC = () => {
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary">database</span>
-                <h3 className="font-bold text-lg text-on-surface">Supabase Connection Settings</h3>
+                <h3 className="font-bold text-lg text-on-surface">Supabase Backend Connection</h3>
               </div>
               <button
                 onClick={() => setShowConfigModal(false)}
@@ -366,7 +379,7 @@ export const AuthScreen: React.FC = () => {
             </div>
 
             <p className="text-xs text-on-surface-variant mb-4">
-              You can connect your live Supabase project by entering your credentials below, or let Vibe run with local persistence.
+              Connect your Supabase project to enable authentic global user authentication, database persistence, and real-time messaging across all devices.
             </p>
 
             <form onSubmit={handleSaveConfig} className="space-y-3">
@@ -414,14 +427,11 @@ export const AuthScreen: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    navigator.clipboard.writeText(
-                      '-- View /supabase/schema.sql in project files for the full schema --'
-                    );
-                    alert('SQL migration file location is /supabase/schema.sql');
+                    setShowConfigModal(false);
                   }}
-                  className="px-3 py-2.5 rounded-xl border border-outline-variant text-xs text-on-surface-variant hover:bg-surface-container"
+                  className="px-4 py-2.5 rounded-xl border border-outline-variant text-xs text-on-surface-variant hover:bg-surface-container"
                 >
-                  View SQL Schema
+                  Close
                 </button>
               </div>
             </form>

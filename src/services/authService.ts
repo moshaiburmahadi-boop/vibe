@@ -6,9 +6,6 @@ import {
   getPhoneDigits,
 } from '../utils/phoneUtils';
 
-const LOCAL_SESSION_KEY = 'vibe_local_session';
-const LOCAL_PROFILES_KEY = 'vibe_local_profiles';
-
 /**
  * Maps raw Supabase / network errors to friendly user-facing messages.
  */
@@ -57,7 +54,7 @@ function mapAuthError(err: any): Error {
     msg.includes('network error') ||
     msg.includes('connection refused')
   ) {
-    return new Error('Unable to connect. Please check your internet connection.');
+    return new Error('Unable to connect to Supabase. Please check your internet connection.');
   }
 
   if (msg.includes('rate limit') || msg.includes('over_request_rate_limit') || status === 429) {
@@ -86,47 +83,18 @@ export const authService = {
       return { user: null, profile: null, error: new Error('Please enter a valid phone number.') };
     }
 
+    if (!isSupabaseConfigured()) {
+      return {
+        user: null,
+        profile: null,
+        error: new Error('Supabase is not configured. Please set your Supabase Project URL and Anon Key to enable global cross-device accounts.'),
+      };
+    }
+
     try {
-      if (!isSupabaseConfigured()) {
-        // Local mode fallback
-        const existingUsers: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-        const exists = existingUsers.find(
-          (p) => normalizePhoneNumber(p.phone_number) === normalizedPhone
-        );
-        if (exists) {
-          return {
-            user: null,
-            profile: null,
-            error: new Error('An account with this phone number already exists. Please sign in.'),
-          };
-        }
-
-        const newId = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        const newProfile: UserProfile = {
-          id: newId,
-          user_id: newId,
-          full_name: fullName.trim(),
-          phone_number: normalizedPhone,
-          username: fullName.toLowerCase().replace(/\s+/g, '_') + '_' + Math.floor(100 + Math.random() * 900),
-          avatar_url: avatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
-          about: 'Hey there! I am using Vibe.',
-          is_online: true,
-          last_seen: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-
-        existingUsers.push(newProfile);
-        localStorage.setItem(LOCAL_PROFILES_KEY, JSON.stringify(existingUsers));
-        localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ userId: newId, profile: newProfile }));
-
-        return { user: { id: newId }, profile: newProfile, error: null };
-      }
-
-      // Supabase Auth Registration
       const phoneEmail = getPhoneAuthEmail(normalizedPhone);
 
-      // Attempt signup with shadow email (which handles phone auth without SMS provider dependency)
+      // Attempt 1: Standard shadow email registration (Universal phone auth without SMS gateway costs)
       let authUser: any = null;
       let authSession: any = null;
 
@@ -143,17 +111,35 @@ export const authService = {
       });
 
       if (signUpError) {
-        return { user: null, profile: null, error: mapAuthError(signUpError) };
-      }
+        // Fallback: If phone provider is enabled on Supabase
+        const { data: phoneSignUpData, error: phoneSignUpErr } = await supabase.auth.signUp({
+          phone: normalizedPhone,
+          password,
+          options: {
+            data: {
+              full_name: fullName.trim(),
+              phone_number: normalizedPhone,
+              avatar_url: avatarUrl || '',
+            },
+          },
+        });
 
-      authUser = signUpData.user;
-      authSession = signUpData.session;
+        if (phoneSignUpErr) {
+          return { user: null, profile: null, error: mapAuthError(signUpError || phoneSignUpErr) };
+        }
+
+        authUser = phoneSignUpData.user;
+        authSession = phoneSignUpData.session;
+      } else {
+        authUser = signUpData.user;
+        authSession = signUpData.session;
+      }
 
       if (!authUser || !authUser.id) {
         return { user: null, profile: null, error: new Error('Failed to create account. Please try again.') };
       }
 
-      // If signup did not automatically establish a session, immediately log in to create the active session
+      // If signup did not automatically establish a session, immediately log in
       if (!authSession) {
         const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
           email: phoneEmail,
@@ -168,7 +154,7 @@ export const authService = {
 
       const userId = authUser.id;
 
-      // Construct and upsert user profile record (profiles.user_id = auth.users.id)
+      // Construct and upsert user profile record into public.profiles (profiles.user_id = auth.users.id)
       const newProfile: UserProfile = {
         id: userId,
         user_id: userId,
@@ -208,33 +194,24 @@ export const authService = {
       return { user: null, profile: null, error: new Error('Please enter a valid phone number.') };
     }
 
+    if (!isSupabaseConfigured()) {
+      return {
+        user: null,
+        profile: null,
+        error: new Error('Supabase is not configured. Please set your Supabase Project URL and Anon Key in settings.'),
+      };
+    }
+
     try {
-      if (!isSupabaseConfigured()) {
-        // Local mode
-        const existingUsers: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-        const profile = existingUsers.find(
-          (p) =>
-            normalizePhoneNumber(p.phone_number) === normalizedPhone ||
-            getPhoneDigits(p.phone_number) === getPhoneDigits(normalizedPhone)
-        );
-
-        if (!profile) {
-          return { user: null, profile: null, error: new Error('No account was found with this phone number.') };
-        }
-
-        localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ userId: profile.user_id, profile }));
-        return { user: { id: profile.user_id }, profile, error: null };
-      }
-
       const phoneEmail = getPhoneAuthEmail(normalizedPhone);
 
-      // Primary login attempt with standard phone-mapped shadow email
+      // Primary login attempt with phone-mapped shadow email
       let signInResult = await supabase.auth.signInWithPassword({
         email: phoneEmail,
         password,
       });
 
-      // Fallback 1: If raw digits variation was used (e.g. without country code)
+      // Fallback 1: Raw digits variation
       if (signInResult.error) {
         const rawDigits = phoneNumber.replace(/\D/g, '');
         if (rawDigits && rawDigits !== getPhoneDigits(normalizedPhone)) {
@@ -271,7 +248,7 @@ export const authService = {
       const authUser = signInResult.data.user;
       const userId = authUser.id;
 
-      // Retrieve user's profile using auth user ID
+      // Retrieve user's profile using auth user ID from Supabase
       let profile = await this.getProfile(userId);
 
       // If profile record is missing in database, safely create and persist it using auth metadata
@@ -319,11 +296,6 @@ export const authService = {
   async getCurrentSession(): Promise<{ userId: string | null; profile: UserProfile | null }> {
     try {
       if (!isSupabaseConfigured()) {
-        const raw = localStorage.getItem(LOCAL_SESSION_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          return { userId: parsed.userId, profile: parsed.profile };
-        }
         return { userId: null, profile: null };
       }
 
@@ -341,12 +313,11 @@ export const authService = {
     }
   },
 
-  // Get single profile by auth user ID
+  // Get single profile by auth user ID from Supabase
   async getProfile(userId: string): Promise<UserProfile | null> {
     try {
       if (!isSupabaseConfigured()) {
-        const existingUsers: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-        return existingUsers.find((p) => p.user_id === userId) || null;
+        return null;
       }
 
       const { data, error } = await supabase
@@ -386,29 +357,14 @@ export const authService = {
     }
   },
 
-  // Update profile
+  // Update profile in Supabase
   async updateProfile(
     userId: string,
     updates: Partial<UserProfile>
   ): Promise<{ profile: UserProfile | null; error: Error | null }> {
     try {
       if (!isSupabaseConfigured()) {
-        const existingUsers: UserProfile[] = JSON.parse(localStorage.getItem(LOCAL_PROFILES_KEY) || '[]');
-        const idx = existingUsers.findIndex((p) => p.user_id === userId);
-        if (idx !== -1) {
-          existingUsers[idx] = {
-            ...existingUsers[idx],
-            ...updates,
-            updated_at: new Date().toISOString(),
-          };
-          localStorage.setItem(LOCAL_PROFILES_KEY, JSON.stringify(existingUsers));
-          localStorage.setItem(
-            LOCAL_SESSION_KEY,
-            JSON.stringify({ userId, profile: existingUsers[idx] })
-          );
-          return { profile: existingUsers[idx], error: null };
-        }
-        return { profile: null, error: new Error('User not found') };
+        return { profile: null, error: new Error('Supabase not configured') };
       }
 
       const { data, error } = await supabase
@@ -425,7 +381,7 @@ export const authService = {
     }
   },
 
-  // Set online presence
+  // Set online presence in Supabase
   async setPresence(userId: string, isOnline: boolean): Promise<void> {
     try {
       if (!isSupabaseConfigured()) return;
@@ -441,15 +397,31 @@ export const authService = {
     }
   },
 
-  // Sign out
+  // Sign out from Supabase
   async signOut(): Promise<void> {
     try {
-      localStorage.removeItem(LOCAL_SESSION_KEY);
       if (isSupabaseConfigured()) {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: 'local' });
       }
     } catch (err) {
-      // Clean up regardless
+      console.warn('Sign out notice:', err);
+    } finally {
+      // Clean up any lingering auth keys in localStorage / sessionStorage
+      if (typeof window !== 'undefined') {
+        try {
+          const keysToRemove: string[] = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && (key.startsWith('sb-') || key.includes('auth-token') || key.includes('supabase.auth.'))) {
+              keysToRemove.push(key);
+            }
+          }
+          keysToRemove.forEach((k) => localStorage.removeItem(k));
+          sessionStorage.clear();
+        } catch (e) {
+          // Ignore
+        }
+      }
     }
   },
 };

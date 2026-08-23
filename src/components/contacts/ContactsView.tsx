@@ -433,18 +433,23 @@ export const ContactsView: React.FC = () => {
 
             {/* Search Result Card */}
             {searchResult?.profile && (
-              <div className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant flex items-center justify-between">
+              <div className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <img
-                    src={
-                      searchResult.profile.avatar_url ||
-                      `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                        searchResult.profile.full_name
-                      )}`
-                    }
-                    alt={searchResult.profile.full_name}
-                    className="w-12 h-12 rounded-full object-cover border border-outline-variant"
-                  />
+                  <div className="relative">
+                    <img
+                      src={
+                        searchResult.profile.avatar_url ||
+                        `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+                          searchResult.profile.full_name
+                        )}`
+                      }
+                      alt={searchResult.profile.full_name}
+                      className="w-12 h-12 rounded-full object-cover border border-outline-variant"
+                    />
+                    {searchResult.profile.is_online && (
+                      <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-surface rounded-full"></span>
+                    )}
+                  </div>
                   <div>
                     <div className="font-bold text-sm text-on-surface">
                       {searchResult.profile.full_name}
@@ -452,26 +457,44 @@ export const ContactsView: React.FC = () => {
                     <div className="text-xs text-on-surface-variant font-mono">
                       {searchResult.profile.phone_number}
                     </div>
+                    {searchResult.profile.about && (
+                      <div className="text-[11px] text-on-surface-variant/80 mt-0.5 line-clamp-1">
+                        {searchResult.profile.about}
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div>
+                <div className="w-full sm:w-auto flex items-center gap-2 justify-end">
                   {searchResult.relationship === 'self' ? (
-                    <span className="text-xs text-outline italic">This is you</span>
+                    <span className="text-xs font-medium text-primary px-3 py-1.5 rounded-full bg-primary/10">You</span>
                   ) : searchResult.relationship === 'contact' ? (
                     <button
                       onClick={() => {
                         setShowAddModal(false);
                         handleOpenChat(searchResult.profile!);
                       }}
-                      className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold"
+                      className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm flex items-center gap-1"
                     >
-                      Message
+                      <span className="material-symbols-outlined text-sm">chat</span>
+                      <span>Message</span>
                     </button>
                   ) : searchResult.relationship === 'request_sent' ? (
-                    <span className="text-xs text-primary font-semibold bg-primary-container/20 px-3 py-1.5 rounded-full">
-                      Request Sent
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setShowAddModal(false);
+                          handleOpenChat(searchResult.profile!);
+                        }}
+                        className="px-3 py-1.5 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm flex items-center gap-1"
+                      >
+                        <span className="material-symbols-outlined text-sm">chat</span>
+                        <span>Message</span>
+                      </button>
+                      <span className="text-xs text-primary font-semibold bg-primary-container/20 px-3 py-1.5 rounded-full">
+                        Request Sent
+                      </span>
+                    </div>
                   ) : searchResult.relationship === 'request_received' ? (
                     <button
                       onClick={() => {
@@ -484,17 +507,29 @@ export const ContactsView: React.FC = () => {
                           setShowAddModal(false);
                         }
                       }}
-                      className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold"
-                    >
-                      Accept Request
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleSendRequest(searchResult.profile!.user_id)}
                       className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm"
                     >
-                      Add Contact
+                      Accept
                     </button>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setShowAddModal(false);
+                          handleOpenChat(searchResult.profile!);
+                        }}
+                        className="px-3 py-1.5 rounded-full bg-surface-container text-on-surface text-xs font-semibold hover:bg-surface-container-high border border-outline-variant flex items-center gap-1 shadow-sm"
+                      >
+                        <span className="material-symbols-outlined text-sm">chat</span>
+                        <span>Message</span>
+                      </button>
+                      <button
+                        onClick={() => handleSendRequest(searchResult.profile!.user_id)}
+                        className="px-4 py-1.5 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm"
+                      >
+                        Add Contact
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>

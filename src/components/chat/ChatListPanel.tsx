@@ -3,16 +3,18 @@ import { useAuth } from '../../context/AuthContext';
 import { chatService } from '../../services/chatService';
 import { Conversation } from '../../types';
 import { isSupabaseConfigured, supabase } from '../../lib/supabase';
+import { NewChatModal } from './NewChatModal';
 
 interface ChatListPanelProps {
   onStartNewChat?: () => void;
 }
 
 export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) => {
-  const { currentUser, activeConversation, setActiveConversation, setActiveTab } = useAuth();
+  const { currentUser, activeConversation, setActiveConversation } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [showNewChatModal, setShowNewChatModal] = useState(false);
 
   const fetchConversations = useCallback(async () => {
     if (!currentUser) return;
@@ -29,13 +31,27 @@ export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) 
   useEffect(() => {
     fetchConversations();
 
-    // Subscribe to messages table for updates to conversation list
+    // Subscribe to messages, conversations, and conversation_members table changes for instant sync
     if (isSupabaseConfigured() && currentUser) {
       const channel = supabase
-        .channel('public:messages_list_updates')
+        .channel(`public:chat_list_${currentUser.user_id}`)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'messages' },
+          () => {
+            fetchConversations();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'conversations' },
+          () => {
+            fetchConversations();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'conversation_members' },
           () => {
             fetchConversations();
           }
@@ -89,8 +105,8 @@ export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) 
         <div className="flex justify-between items-center">
           <h2 className="text-2xl md:text-3xl font-bold text-on-surface tracking-tight">Messages</h2>
           <button
-            onClick={() => (onStartNewChat ? onStartNewChat() : setActiveTab('contacts'))}
-            title="Start new conversation"
+            onClick={() => (onStartNewChat ? onStartNewChat() : setShowNewChatModal(true))}
+            title="Find user by phone & message"
             className="w-10 h-10 rounded-full border border-outline-variant flex items-center justify-center text-on-surface-variant hover:bg-surface-container hover:text-primary transition-all active:scale-95 shadow-sm"
           >
             <span className="material-symbols-outlined text-xl">edit_square</span>
@@ -106,7 +122,7 @@ export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) 
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search conversations"
+            placeholder="Search active chats"
             className="w-full h-11 bg-surface-container-low rounded-full pl-11 pr-4 font-body-md text-sm text-on-surface placeholder:text-outline border-none focus:ring-2 focus:ring-primary/40 transition-shadow outline-none"
           />
         </div>
@@ -127,16 +143,17 @@ export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) 
             <p className="font-semibold text-sm text-on-surface mb-1">
               {searchQuery ? 'No chats match your search' : 'No conversations yet'}
             </p>
-            <p className="text-xs text-on-surface-variant max-w-[220px] mb-4">
+            <p className="text-xs text-on-surface-variant max-w-[240px] mb-4">
               {searchQuery
                 ? 'Try a different contact name or message keyword.'
-                : 'Connect with colleagues and friends by adding contacts.'}
+                : 'Search any user by phone number to start a private conversation.'}
             </p>
             <button
-              onClick={() => (onStartNewChat ? onStartNewChat() : setActiveTab('contacts'))}
-              className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container transition-transform active:scale-95 shadow-sm"
+              onClick={() => (onStartNewChat ? onStartNewChat() : setShowNewChatModal(true))}
+              className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container transition-transform active:scale-95 shadow-sm flex items-center gap-1.5 mx-auto"
             >
-              Start New Chat
+              <span className="material-symbols-outlined text-base">person_search</span>
+              <span>Find User by Phone</span>
             </button>
           </div>
         ) : (
@@ -239,6 +256,12 @@ export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) 
           })
         )}
       </div>
+
+      {/* Find User / New Chat Modal */}
+      <NewChatModal
+        isOpen={showNewChatModal}
+        onClose={() => setShowNewChatModal(false)}
+      />
     </div>
   );
 };
