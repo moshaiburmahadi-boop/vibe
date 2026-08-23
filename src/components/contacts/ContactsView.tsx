@@ -2,75 +2,112 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { contactService } from '../../services/contactService';
 import { chatService } from '../../services/chatService';
-import { Contact, ContactRequest, UserProfile } from '../../types';
-import { realtimeService } from '../../services/realtimeService';
+import { UserProfile } from '../../types';
+import { isSupabaseConfigured, supabase } from '../../lib/supabase';
+import { getPhoneDigits } from '../../utils/phoneUtils';
 
 export const ContactsView: React.FC = () => {
   const { currentUser, setActiveConversation, setActiveTab, startCall } = useAuth();
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [requests, setRequests] = useState<{ received: ContactRequest[]; sent: ContactRequest[] }>({
-    received: [],
-    sent: [],
-  });
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [activeChatUserIds, setActiveChatUserIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [addingUserId, setAddingUserId] = useState<string | null>(null);
 
-  // Add Contact Modal
+  // Add Contact Modal (Find User by Phone)
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchPhone, setSearchPhone] = useState('');
   const [isSearchingUser, setIsSearchingUser] = useState(false);
   const [searchResult, setSearchResult] = useState<{
     profile: UserProfile | null;
     relationship: 'self' | 'none' | 'contact' | 'request_sent' | 'request_received';
-    requestId?: string;
   } | null>(null);
   const [searchFeedback, setSearchFeedback] = useState('');
 
-  const loadContactsAndRequests = useCallback(async () => {
+  const loadContactsAndChats = useCallback(async () => {
     if (!currentUser) return;
     setIsLoading(true);
     try {
-      const [contactsList, requestsData] = await Promise.all([
-        contactService.getContacts(currentUser.user_id),
-        contactService.getContactRequests(currentUser.user_id),
+      const [registeredList, convsList] = await Promise.all([
+        contactService.getRegisteredUsers(currentUser.user_id),
+        chatService.getConversations(currentUser.user_id),
       ]);
-      setContacts(contactsList);
-      setRequests(requestsData);
+      setUsers(registeredList);
+
+      const chatIds = new Set<string>();
+      convsList.forEach((c) => {
+        if (c.other_member?.user_id) {
+          chatIds.add(c.other_member.user_id);
+        }
+      });
+      setActiveChatUserIds(chatIds);
     } catch (err) {
-      console.error('Failed to load contacts:', err);
+      console.error('Failed to load contacts directory:', err);
     } finally {
       setIsLoading(false);
     }
   }, [currentUser]);
 
   useEffect(() => {
-    loadContactsAndRequests();
+    loadContactsAndChats();
 
-    if (currentUser) {
-      const channel = realtimeService.subscribeToContactRequests(currentUser.user_id, () => {
-        loadContactsAndRequests();
-      });
+    // Subscribe to profiles, conversations, and conversation_members table changes
+    if (isSupabaseConfigured() && currentUser) {
+      const channel = supabase
+        .channel(`public:contacts_view_${currentUser.user_id}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'profiles' },
+          () => {
+            loadContactsAndChats();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'conversation_members' },
+          () => {
+            loadContactsAndChats();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'conversations' },
+          () => {
+            loadContactsAndChats();
+          }
+        )
+        .subscribe();
 
       return () => {
-        realtimeService.unsubscribe(channel);
+        supabase.removeChannel(channel);
       };
     }
-  }, [loadContactsAndRequests, currentUser]);
+  }, [loadContactsAndChats, currentUser]);
 
-  // Start chat with contact
-  const handleOpenChat = async (contactUser: UserProfile) => {
+  // Add Contact to Chat or Open Existing Chat
+  const handleAddToChat = async (targetUser: UserProfile) => {
     if (!currentUser) return;
-    const { conversation } = await chatService.getOrCreateDirectConversation(
-      currentUser.user_id,
-      contactUser.user_id
-    );
-    if (conversation) {
-      setActiveConversation(conversation);
-      setActiveTab('chats');
+    setAddingUserId(targetUser.user_id);
+    try {
+      const { conversation, error } = await chatService.getOrCreateDirectConversation(
+        currentUser.user_id,
+        targetUser.user_id
+      );
+      if (conversation && !error) {
+        setActiveChatUserIds((prev) => new Set([...Array.from(prev), targetUser.user_id]));
+        setActiveConversation(conversation);
+        setActiveTab('chats');
+      } else {
+        console.error('Failed to add to chat:', error);
+      }
+    } catch (err) {
+      console.error('Add to chat error:', err);
+    } finally {
+      setAddingUserId(null);
     }
   };
 
-  // Search user by phone
+  // Search user by phone in modal
   const handleSearchUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchPhone.trim() || !currentUser) return;
@@ -85,7 +122,6 @@ export const ContactsView: React.FC = () => {
         setSearchResult({
           profile: res.profile,
           relationship: res.relationship,
-          requestId: res.requestId,
         });
       } else {
         setSearchFeedback('User not found. Check the phone number.');
@@ -97,51 +133,42 @@ export const ContactsView: React.FC = () => {
     }
   };
 
-  // Send request
-  const handleSendRequest = async (receiverId: string) => {
-    if (!currentUser) return;
-    const res = await contactService.sendContactRequest(currentUser.user_id, receiverId);
-    if (!res.error) {
-      setSearchResult((prev) => (prev ? { ...prev, relationship: 'request_sent' } : null));
-      loadContactsAndRequests();
-    } else {
-      alert(res.error.message);
-    }
-  };
+  // Online contacts list
+  const onlineUsers = users.filter((u) => u.is_online);
 
-  // Accept/Reject request
-  const handleRespondRequest = async (
-    requestId: string,
-    status: 'accepted' | 'rejected',
-    senderId: string
-  ) => {
-    if (!currentUser) return;
-    await contactService.respondContactRequest(requestId, status, senderId, currentUser.user_id);
-    loadContactsAndRequests();
-  };
-
-  // Online contacts
-  const onlineContacts = contacts.filter((c) => c.profile?.is_online);
-
-  // Group contacts alphabetically
-  const filteredContacts = contacts.filter((c) => {
-    const name = c.profile?.full_name || '';
-    const phone = c.profile?.phone_number || '';
-    return (
-      name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      phone.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+  // Filtered contacts based on search query
+  const filteredUsers = users.filter((u) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    const nameMatch = (u.full_name || '').toLowerCase().includes(q);
+    const phoneMatch =
+      (u.phone_number || '').includes(q) ||
+      getPhoneDigits(u.phone_number || '').includes(getPhoneDigits(q));
+    return nameMatch || phoneMatch;
   });
 
-  const groupedContacts = filteredContacts.reduce<{ [letter: string]: Contact[] }>((acc, contact) => {
-    const name = contact.profile?.full_name || 'Other';
-    const firstLetter = name[0].toUpperCase();
-    if (!acc[firstLetter]) acc[firstLetter] = [];
-    acc[firstLetter].push(contact);
+  // Sort alphabetically case-insensitively
+  const sortedUsers = [...filteredUsers].sort((a, b) => {
+    const nameA = (a.full_name || a.phone_number || '').trim();
+    const nameB = (b.full_name || b.phone_number || '').trim();
+    return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+  });
+
+  // Group contacts by first letter
+  const groupedContacts = sortedUsers.reduce<{ [letter: string]: UserProfile[] }>((acc, user) => {
+    const name = (user.full_name || user.phone_number || 'Other').trim();
+    const firstChar = name.charAt(0).toUpperCase();
+    const letter = /^[A-Z]$/.test(firstChar) ? firstChar : '#';
+    if (!acc[letter]) acc[letter] = [];
+    acc[letter].push(user);
     return acc;
   }, {});
 
-  const sortedLetters = Object.keys(groupedContacts).sort();
+  const sortedLetters = Object.keys(groupedContacts).sort((a, b) => {
+    if (a === '#') return 1;
+    if (b === '#') return -1;
+    return a.localeCompare(b);
+  });
 
   return (
     <div className="flex-1 flex flex-col h-full bg-background overflow-hidden relative pb-20 md:pb-0">
@@ -149,20 +176,18 @@ export const ContactsView: React.FC = () => {
       <header className="bg-surface/80 backdrop-blur-md border-b border-outline-variant flex justify-between items-center w-full px-4 md:px-8 h-16 shrink-0 z-10">
         <div className="flex items-center gap-2">
           <h1 className="text-2xl md:text-3xl font-bold text-primary tracking-tight">Contacts</h1>
-          {requests.received.length > 0 && (
-            <span className="bg-primary text-on-primary text-xs font-bold px-2 py-0.5 rounded-full">
-              {requests.received.length} new
-            </span>
-          )}
+          <span className="bg-surface-container-high text-on-surface-variant text-xs font-semibold px-2.5 py-0.5 rounded-full border border-outline-variant/50">
+            {users.length} {users.length === 1 ? 'user' : 'users'}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container transition-transform active:scale-95 shadow-sm"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container transition-transform active:scale-95 shadow-sm"
           >
-            <span className="material-symbols-outlined text-sm">person_add</span>
-            <span>Add Contact</span>
+            <span className="material-symbols-outlined text-sm">person_search</span>
+            <span>Find by Phone</span>
           </button>
         </div>
       </header>
@@ -183,92 +208,32 @@ export const ContactsView: React.FC = () => {
           />
         </div>
 
-        {/* Pending Requests Section if any */}
-        {requests.received.length > 0 && (
-          <section className="mb-6 bg-surface-container-low p-4 rounded-2xl border border-primary/20">
-            <h3 className="font-semibold text-sm text-primary mb-3 flex items-center gap-2">
-              <span className="material-symbols-outlined text-lg">group_add</span>
-              Contact Requests ({requests.received.length})
-            </h3>
-            <div className="flex flex-col gap-2.5">
-              {requests.received.map((req) => (
-                <div
-                  key={req.id}
-                  className="flex items-center justify-between p-3 bg-surface rounded-xl border border-outline-variant/60 shadow-sm"
-                >
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={
-                        req.sender_profile?.avatar_url ||
-                        `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                          req.sender_profile?.full_name || 'User'
-                        )}`
-                      }
-                      alt={req.sender_profile?.full_name || 'User'}
-                      className="w-10 h-10 rounded-full object-cover border border-outline-variant"
-                    />
-                    <div>
-                      <div className="font-semibold text-sm text-on-surface">
-                        {req.sender_profile?.full_name || 'Unknown User'}
-                      </div>
-                      <div className="text-xs text-on-surface-variant font-mono">
-                        {req.sender_profile?.phone_number}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() =>
-                        handleRespondRequest(req.id, 'accepted', req.sender_id)
-                      }
-                      className="px-3 py-1.5 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm transition-transform active:scale-95"
-                    >
-                      Accept
-                    </button>
-                    <button
-                      onClick={() =>
-                        handleRespondRequest(req.id, 'rejected', req.sender_id)
-                      }
-                      className="px-3 py-1.5 rounded-full bg-surface-container text-on-surface-variant text-xs font-semibold hover:bg-surface-container-high transition-transform active:scale-95"
-                    >
-                      Decline
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
         {/* Online Horizontal Scroll */}
-        {onlineContacts.length > 0 && (
+        {onlineUsers.length > 0 && !searchQuery && (
           <section className="mb-6 flex-none">
             <h2 className="font-semibold text-base text-on-surface mb-3">Online</h2>
             <div className="flex overflow-x-auto gap-4 no-scrollbar pb-2">
-              {onlineContacts.map((c) => {
-                const profile = c.profile;
-                if (!profile) return null;
+              {onlineUsers.map((user) => {
+                const displayName = user.full_name || 'User';
+                const avatar =
+                  user.avatar_url ||
+                  `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`;
                 return (
                   <div
-                    key={c.id}
-                    onClick={() => handleOpenChat(profile)}
-                    className="flex flex-col items-center gap-1.5 min-w-[68px] cursor-pointer active:scale-95 transition-transform"
+                    key={user.user_id}
+                    onClick={() => handleAddToChat(user)}
+                    className="flex flex-col items-center gap-1.5 min-w-[68px] cursor-pointer active:scale-95 transition-transform group"
                   >
-                    <div className="relative w-14 h-14 rounded-full p-0.5 bg-surface-container-high border border-outline-variant">
+                    <div className="relative w-14 h-14 rounded-full p-0.5 bg-surface-container-high border border-outline-variant group-hover:border-primary transition-colors">
                       <img
-                        src={
-                          profile.avatar_url ||
-                          `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                            profile.full_name
-                          )}`
-                        }
-                        alt={profile.full_name}
+                        src={avatar}
+                        alt={displayName}
                         className="w-full h-full rounded-full object-cover"
                       />
                       <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-tertiary-fixed-dim rounded-full border-2 border-surface"></div>
                     </div>
                     <span className="text-xs font-medium text-on-surface truncate w-full text-center">
-                      {profile.full_name.split(' ')[0]}
+                      {displayName.split(' ')[0]}
                     </span>
                   </div>
                 );
@@ -277,15 +242,19 @@ export const ContactsView: React.FC = () => {
           </section>
         )}
 
-        {/* All Contacts Vertical List */}
+        {/* All Contacts Directory Vertical List */}
         <section className="flex-1 flex flex-col pb-12">
-          <h2 className="font-semibold text-base text-on-surface mb-3 sticky top-0 bg-background/95 backdrop-blur-sm py-1 z-10">
-            All Contacts ({contacts.length})
-          </h2>
+          <div className="flex justify-between items-center mb-3 sticky top-0 bg-background/95 backdrop-blur-sm py-1 z-10">
+            <h2 className="font-semibold text-base text-on-surface">
+              All Contacts ({sortedUsers.length})
+            </h2>
+            <span className="text-xs text-on-surface-variant">Global Directory</span>
+          </div>
 
           {isLoading ? (
-            <div className="flex justify-center py-12">
+            <div className="flex flex-col items-center justify-center py-16 gap-3 text-on-surface-variant">
               <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+              <span className="text-xs">Loading directory...</span>
             </div>
           ) : sortedLetters.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center text-on-surface-variant">
@@ -293,77 +262,109 @@ export const ContactsView: React.FC = () => {
                 <span className="material-symbols-outlined text-3xl">contacts</span>
               </div>
               <p className="font-bold text-base text-on-surface mb-1">
-                {searchQuery ? 'No contacts match your query' : 'No contacts added yet'}
+                {searchQuery ? 'No contacts match your query' : 'No contacts found'}
               </p>
-              <p className="text-xs max-w-xs mb-4">
+              <p className="text-xs max-w-xs mb-4 text-on-surface-variant">
                 {searchQuery
                   ? 'Check the spelling or try searching by phone number.'
-                  : 'Search for members by phone number to connect and start messaging.'}
+                  : 'Registered users on Vibe will automatically appear here in the directory.'}
               </p>
               <button
                 onClick={() => setShowAddModal(true)}
-                className="px-5 py-2.5 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-md transition-transform active:scale-95"
+                className="px-5 py-2.5 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-md transition-transform active:scale-95 flex items-center gap-1.5 mx-auto"
               >
-                Add Your First Contact
+                <span className="material-symbols-outlined text-base">person_search</span>
+                <span>Find User by Phone</span>
               </button>
             </div>
           ) : (
             <div className="flex flex-col gap-4">
               {sortedLetters.map((letter) => (
                 <div key={letter} className="flex flex-col gap-2">
-                  <div className="text-xs font-bold text-outline px-1">{letter}</div>
-                  {groupedContacts[letter].map((contact) => {
-                    const prof = contact.profile;
-                    if (!prof) return null;
-                    const isOnline = prof.is_online;
+                  <div className="text-xs font-bold text-primary px-1">{letter}</div>
+                  {groupedContacts[letter].map((user) => {
+                    const displayName = user.full_name || 'User';
+                    const avatar =
+                      user.avatar_url ||
+                      `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`;
+                    const isOnline = user.is_online;
+                    const isInChat = activeChatUserIds.has(user.user_id);
+                    const isAdding = addingUserId === user.user_id;
+
                     return (
                       <div
-                        key={contact.id}
-                        className="flex items-center justify-between p-3.5 bg-surface rounded-2xl border border-outline-variant/60 hover:bg-surface-container-low transition-colors shadow-sm"
+                        key={user.user_id}
+                        className="flex items-center justify-between p-3.5 bg-surface rounded-2xl border border-outline-variant/60 hover:bg-surface-container-low transition-colors shadow-sm gap-3"
                       >
                         <div
-                          onClick={() => handleOpenChat(prof)}
+                          onClick={() => handleAddToChat(user)}
                           className="flex items-center gap-3.5 cursor-pointer min-w-0 flex-1"
                         >
                           <div className="relative w-11 h-11 rounded-full shrink-0">
                             <img
-                              src={
-                                prof.avatar_url ||
-                                `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
-                                  prof.full_name
-                                )}`
-                              }
-                              alt={prof.full_name}
+                              src={avatar}
+                              alt={displayName}
                               className="w-full h-full rounded-full object-cover border border-outline-variant/60"
                             />
                             {isOnline && (
                               <div className="absolute bottom-0 right-0 w-3 h-3 bg-tertiary-fixed-dim rounded-full border-2 border-surface"></div>
                             )}
                           </div>
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <div className="font-semibold text-sm text-on-surface truncate">
-                              {prof.full_name}
+                              {displayName}
                             </div>
                             <div className="text-xs text-on-surface-variant font-mono truncate">
-                              {prof.phone_number}
+                              {user.phone_number}
                             </div>
+                            {user.about && (
+                              <div className="text-[11px] text-on-surface-variant/70 truncate">
+                                {user.about}
+                              </div>
+                            )}
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        {/* Action buttons */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {isInChat ? (
+                            <button
+                              onClick={() => handleAddToChat(user)}
+                              title="Open Chat"
+                              className="px-3.5 py-1.5 rounded-full bg-primary-container/20 text-primary hover:bg-primary hover:text-on-primary transition-colors text-xs font-semibold flex items-center gap-1 shadow-sm"
+                            >
+                              <span className="material-symbols-outlined text-base">chat</span>
+                              <span>Open Chat</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleAddToChat(user)}
+                              disabled={isAdding}
+                              title="Add to Chat"
+                              className="px-3.5 py-1.5 rounded-full bg-primary text-on-primary hover:bg-primary-container transition-transform active:scale-95 text-xs font-semibold flex items-center gap-1 shadow-sm disabled:opacity-50"
+                            >
+                              {isAdding ? (
+                                <div className="w-3.5 h-3.5 border-2 border-on-primary border-t-transparent rounded-full animate-spin"></div>
+                              ) : (
+                                <span className="material-symbols-outlined text-base">add_comment</span>
+                              )}
+                              <span>Add to Chat</span>
+                            </button>
+                          )}
+
                           <button
-                            onClick={() => handleOpenChat(prof)}
-                            title="Message"
-                            className="w-9 h-9 flex items-center justify-center rounded-full bg-surface-container text-primary hover:bg-primary hover:text-white transition-colors"
+                            onClick={() => startCall(user, 'voice')}
+                            title="Call"
+                            className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-container text-primary hover:bg-primary hover:text-white transition-colors"
                           >
-                            <span className="material-symbols-outlined text-lg">chat</span>
+                            <span className="material-symbols-outlined text-base">call</span>
                           </button>
                           <button
-                            onClick={() => startCall(prof, 'voice')}
-                            title="Call"
-                            className="w-9 h-9 flex items-center justify-center rounded-full bg-surface-container text-primary hover:bg-primary hover:text-white transition-colors"
+                            onClick={() => startCall(user, 'video')}
+                            title="Video Call"
+                            className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-container text-primary hover:bg-primary hover:text-white transition-colors"
                           >
-                            <span className="material-symbols-outlined text-lg">call</span>
+                            <span className="material-symbols-outlined text-base">videocam</span>
                           </button>
                         </div>
                       </div>
@@ -381,15 +382,15 @@ export const ContactsView: React.FC = () => {
         onClick={() => setShowAddModal(true)}
         className="md:hidden fixed bottom-24 right-5 w-14 h-14 bg-primary text-white rounded-full flex items-center justify-center shadow-xl hover:bg-primary-container active:scale-95 transition-all z-40"
       >
-        <span className="material-symbols-outlined text-2xl">add</span>
+        <span className="material-symbols-outlined text-2xl">person_search</span>
       </button>
 
-      {/* Add Contact Modal */}
+      {/* Find User Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-outline-variant">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-lg text-on-surface">Find &amp; Add Contact</h3>
+              <h3 className="font-bold text-lg text-on-surface">Find User by Phone</h3>
               <button
                 onClick={() => {
                   setShowAddModal(false);
@@ -404,7 +405,7 @@ export const ContactsView: React.FC = () => {
             </div>
 
             <p className="text-xs text-on-surface-variant mb-4">
-              Search by full phone number (e.g. +15550000000) to find a user on Vibe.
+              Enter full phone number to find a registered user on Vibe.
             </p>
 
             <form onSubmit={handleSearchUser} className="flex gap-2 mb-4">
@@ -468,68 +469,21 @@ export const ContactsView: React.FC = () => {
                 <div className="w-full sm:w-auto flex items-center gap-2 justify-end">
                   {searchResult.relationship === 'self' ? (
                     <span className="text-xs font-medium text-primary px-3 py-1.5 rounded-full bg-primary/10">You</span>
-                  ) : searchResult.relationship === 'contact' ? (
+                  ) : (
                     <button
                       onClick={() => {
                         setShowAddModal(false);
-                        handleOpenChat(searchResult.profile!);
+                        handleAddToChat(searchResult.profile!);
                       }}
                       className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm flex items-center gap-1"
                     >
                       <span className="material-symbols-outlined text-sm">chat</span>
-                      <span>Message</span>
-                    </button>
-                  ) : searchResult.relationship === 'request_sent' ? (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          setShowAddModal(false);
-                          handleOpenChat(searchResult.profile!);
-                        }}
-                        className="px-3 py-1.5 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm flex items-center gap-1"
-                      >
-                        <span className="material-symbols-outlined text-sm">chat</span>
-                        <span>Message</span>
-                      </button>
-                      <span className="text-xs text-primary font-semibold bg-primary-container/20 px-3 py-1.5 rounded-full">
-                        Request Sent
+                      <span>
+                        {activeChatUserIds.has(searchResult.profile.user_id)
+                          ? 'Open Chat'
+                          : 'Add to Chat'}
                       </span>
-                    </div>
-                  ) : searchResult.relationship === 'request_received' ? (
-                    <button
-                      onClick={() => {
-                        if (searchResult.requestId) {
-                          handleRespondRequest(
-                            searchResult.requestId,
-                            'accepted',
-                            searchResult.profile!.user_id
-                          );
-                          setShowAddModal(false);
-                        }
-                      }}
-                      className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm"
-                    >
-                      Accept
                     </button>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          setShowAddModal(false);
-                          handleOpenChat(searchResult.profile!);
-                        }}
-                        className="px-3 py-1.5 rounded-full bg-surface-container text-on-surface text-xs font-semibold hover:bg-surface-container-high border border-outline-variant flex items-center gap-1 shadow-sm"
-                      >
-                        <span className="material-symbols-outlined text-sm">chat</span>
-                        <span>Message</span>
-                      </button>
-                      <button
-                        onClick={() => handleSendRequest(searchResult.profile!.user_id)}
-                        className="px-4 py-1.5 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm"
-                      >
-                        Add Contact
-                      </button>
-                    </div>
                   )}
                 </div>
               </div>

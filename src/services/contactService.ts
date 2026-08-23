@@ -7,6 +7,28 @@ import {
 } from '../utils/phoneUtils';
 
 export const contactService = {
+  // Get all registered users from Supabase profiles (excluding current user)
+  async getRegisteredUsers(currentUserId: string): Promise<UserProfile[]> {
+    if (!isSupabaseConfigured() || !currentUserId) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .neq('user_id', currentUserId);
+
+      if (error || !data) {
+        console.error('Error fetching registered users:', error);
+        return [];
+      }
+
+      return data as UserProfile[];
+    } catch (err) {
+      console.error('Failed to get registered users:', err);
+      return [];
+    }
+  },
+
   // Search user globally in Supabase profiles by phone number
   async searchUserByPhone(
     phoneNumber: string,

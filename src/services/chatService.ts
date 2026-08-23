@@ -112,46 +112,125 @@ export const chatService = {
 
     try {
       // Step 1: Check if a direct conversation already exists between currentUserId and targetUserId
+      // Case A: Both are currently in conversation_members
       const { data: myConvs } = await supabase
         .from('conversation_members')
         .select('conversation_id')
         .eq('user_id', currentUserId);
 
+      let directConvId: string | null = null;
+
       if (myConvs && myConvs.length > 0) {
-        const convIds = myConvs.map((c) => c.conversation_id);
+        const myConvIds = myConvs.map((c) => c.conversation_id);
         const { data: targetConvs } = await supabase
           .from('conversation_members')
           .select('conversation_id')
           .eq('user_id', targetUserId)
-          .in('conversation_id', convIds);
+          .in('conversation_id', myConvIds);
 
         if (targetConvs && targetConvs.length > 0) {
-          const directConvId = targetConvs[0].conversation_id;
-          const { data: convData } = await supabase
+          directConvId = targetConvs[0].conversation_id;
+        }
+      }
+
+      // Case B: If not found via active membership (e.g. current user deleted the chat previously),
+      // check target user's direct conversations to avoid creating a duplicate direct conversation
+      if (!directConvId) {
+        const { data: targetMemberRows } = await supabase
+          .from('conversation_members')
+          .select('conversation_id')
+          .eq('user_id', targetUserId);
+
+        if (targetMemberRows && targetMemberRows.length > 0) {
+          const tConvIds = targetMemberRows.map((r) => r.conversation_id);
+          const { data: directConvs } = await supabase
             .from('conversations')
-            .select('*')
-            .eq('id', directConvId)
-            .single();
+            .select('id')
+            .in('id', tConvIds)
+            .eq('conversation_type', 'direct');
 
-          if (convData) {
-            const { data: targetProf } = await supabase
-              .from('profiles')
-              .select('*')
-              .eq('user_id', targetUserId)
-              .single();
+          if (directConvs && directConvs.length > 0) {
+            for (const dConv of directConvs) {
+              // Check if messages in this conversation were exchanged between current and target user
+              const { data: msgSample } = await supabase
+                .from('messages')
+                .select('id')
+                .eq('conversation_id', dConv.id)
+                .or(`sender_id.eq.${currentUserId},sender_id.eq.${targetUserId}`)
+                .limit(1);
 
-            const fullConv: Conversation = {
-              ...convData,
-              members: [],
-              other_member: targetProf as UserProfile,
-              unread_count: 0,
-            };
-            return { conversation: fullConv, error: null };
+              if (msgSample && msgSample.length > 0) {
+                directConvId = dConv.id;
+                break;
+              }
+            }
           }
         }
       }
 
-      // Step 2: Create new conversation in Supabase
+      if (directConvId) {
+        // Ensure current user is in conversation_members
+        const { data: existingMyMember } = await supabase
+          .from('conversation_members')
+          .select('id')
+          .eq('conversation_id', directConvId)
+          .eq('user_id', currentUserId)
+          .maybeSingle();
+
+        if (!existingMyMember) {
+          await supabase.from('conversation_members').insert({
+            conversation_id: directConvId,
+            user_id: currentUserId,
+          });
+        }
+
+        // Ensure target user is in conversation_members
+        const { data: existingTargetMember } = await supabase
+          .from('conversation_members')
+          .select('id')
+          .eq('conversation_id', directConvId)
+          .eq('user_id', targetUserId)
+          .maybeSingle();
+
+        if (!existingTargetMember) {
+          await supabase.from('conversation_members').insert({
+            conversation_id: directConvId,
+            user_id: targetUserId,
+          });
+        }
+
+        const { data: convData } = await supabase
+          .from('conversations')
+          .select('*')
+          .eq('id', directConvId)
+          .single();
+
+        const { data: targetProf } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('user_id', targetUserId)
+          .single();
+
+        // Get last message if any
+        const { data: msgData } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('conversation_id', directConvId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const fullConv: Conversation = {
+          ...convData,
+          members: [],
+          other_member: targetProf as UserProfile,
+          last_message: msgData ? (msgData as Message) : null,
+          unread_count: 0,
+        };
+        return { conversation: fullConv, error: null };
+      }
+
+      // Step 2: Create brand new conversation in Supabase
       const { data: newConvData, error: convError } = await supabase
         .from('conversations')
         .insert({ conversation_type: 'direct' })
@@ -178,12 +257,35 @@ export const chatService = {
         ...newConvData,
         members: [],
         other_member: targetProfile as UserProfile,
+        last_message: null,
         unread_count: 0,
       };
 
       return { conversation: created, error: null };
     } catch (err: any) {
       return { conversation: null, error: err };
+    }
+  },
+
+  // Delete / Remove conversation for user (removes from user's chat list while keeping global conversation & data safe)
+  async deleteConversationForUser(
+    conversationId: string,
+    userId: string
+  ): Promise<{ error: Error | null }> {
+    if (!isSupabaseConfigured() || !conversationId || !userId) {
+      return { error: new Error('Missing conversation ID or user ID') };
+    }
+
+    try {
+      const { error } = await supabase
+        .from('conversation_members')
+        .delete()
+        .eq('conversation_id', conversationId)
+        .eq('user_id', userId);
+
+      return { error };
+    } catch (err: any) {
+      return { error: err };
     }
   },
 

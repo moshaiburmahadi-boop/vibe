@@ -98,6 +98,19 @@ export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) 
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
+  const handleDeleteConversation = async (e: React.MouseEvent, conv: Conversation) => {
+    e.stopPropagation();
+    if (!currentUser) return;
+    const name = conv.other_member?.full_name || conv.name || 'this conversation';
+    if (window.confirm(`Delete chat with ${name}? (The user will remain in your Contacts directory)`)) {
+      await chatService.deleteConversationForUser(conv.id, currentUser.user_id);
+      if (activeConversation?.id === conv.id) {
+        setActiveConversation(null);
+      }
+      fetchConversations();
+    }
+  };
+
   return (
     <div className="w-full md:w-[320px] lg:w-[360px] flex-shrink-0 border-r border-outline-variant bg-surface flex flex-col h-full z-10 relative">
       {/* Header & Search */}
@@ -146,7 +159,7 @@ export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) 
             <p className="text-xs text-on-surface-variant max-w-[240px] mb-4">
               {searchQuery
                 ? 'Try a different contact name or message keyword.'
-                : 'Search any user by phone number to start a private conversation.'}
+                : 'Search any user by phone number or select a user from Contacts to start chatting.'}
             </p>
             <button
               onClick={() => (onStartNewChat ? onStartNewChat() : setShowNewChatModal(true))}
@@ -175,7 +188,7 @@ export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) 
                 onClick={() => {
                   setActiveConversation(conv);
                 }}
-                className={`flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all duration-150 group select-none ${
+                className={`flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all duration-150 group select-none relative ${
                   isSelected
                     ? 'bg-primary-container/10 border-l-4 border-primary'
                     : 'hover:bg-surface-container/60 border-l-4 border-transparent'
@@ -243,12 +256,23 @@ export const ChatListPanel: React.FC<ChatListPanelProps> = ({ onStartNewChat }) 
                       )}
                     </p>
 
-                    {/* Unread badge */}
-                    {hasUnread && (
-                      <div className="bg-primary text-on-primary rounded-full min-w-[20px] h-5 px-1.5 flex items-center justify-center text-[10px] font-bold shrink-0 shadow-sm">
-                        {conv.unread_count}
-                      </div>
-                    )}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Unread badge */}
+                      {hasUnread && (
+                        <div className="bg-primary text-on-primary rounded-full min-w-[20px] h-5 px-1.5 flex items-center justify-center text-[10px] font-bold shrink-0 shadow-sm">
+                          {conv.unread_count}
+                        </div>
+                      )}
+
+                      {/* Delete chat button (shows on hover) */}
+                      <button
+                        onClick={(e) => handleDeleteConversation(e, conv)}
+                        title="Delete chat"
+                        className="opacity-0 group-hover:opacity-100 hover:text-error transition-all p-1 rounded-full hover:bg-surface-container text-on-surface-variant"
+                      >
+                        <span className="material-symbols-outlined text-base">delete</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

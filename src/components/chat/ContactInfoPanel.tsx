@@ -4,7 +4,13 @@ import { chatService } from '../../services/chatService';
 import { Message } from '../../types';
 
 export const ContactInfoPanel: React.FC = () => {
-  const { activeConversation, showContactInfo, setShowContactInfo } = useAuth();
+  const {
+    currentUser,
+    activeConversation,
+    setActiveConversation,
+    showContactInfo,
+    setShowContactInfo,
+  } = useAuth();
   const [isMuted, setIsMuted] = useState(false);
   const [conversationMedia, setConversationMedia] = useState<Message[]>([]);
   const [conversationFiles, setConversationFiles] = useState<Message[]>([]);
@@ -28,6 +34,19 @@ export const ContactInfoPanel: React.FC = () => {
     `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`;
   const about = otherMember?.about || 'Hey there! I am using Vibe.';
   const phone = otherMember?.phone_number || '';
+
+  const handleDeleteChat = async () => {
+    if (!currentUser || !activeConversation) return;
+    if (
+      window.confirm(
+        `Delete chat with ${displayName}? (The contact will remain in your Contacts directory)`
+      )
+    ) {
+      await chatService.deleteConversationForUser(activeConversation.id, currentUser.user_id);
+      setActiveConversation(null);
+      setShowContactInfo(false);
+    }
+  };
 
   return (
     <div className="w-[320px] flex-shrink-0 border-l border-outline-variant bg-surface flex flex-col h-full z-10 overflow-y-auto select-none">
@@ -119,7 +138,7 @@ export const ContactInfoPanel: React.FC = () => {
       </div>
 
       {/* Files Section */}
-      <div className="p-4">
+      <div className="p-4 border-b border-outline-variant">
         <div className="flex justify-between items-center mb-3">
           <h3 className="font-semibold text-sm text-on-surface">Files &amp; Documents ({conversationFiles.length})</h3>
         </div>
@@ -148,6 +167,17 @@ export const ContactInfoPanel: React.FC = () => {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Danger Zone: Delete Chat */}
+      <div className="p-4 mt-auto">
+        <button
+          onClick={handleDeleteChat}
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-error-container/20 text-error hover:bg-error-container/40 transition-colors text-xs font-semibold"
+        >
+          <span className="material-symbols-outlined text-lg">delete</span>
+          <span>Delete Chat</span>
+        </button>
       </div>
     </div>
   );
