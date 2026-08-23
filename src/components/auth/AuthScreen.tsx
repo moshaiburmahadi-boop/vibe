@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storageService';
-import { isSupabaseConfigured, getSupabaseConfig, setSupabaseConfig } from '../../lib/supabase';
 
 export const AuthScreen: React.FC = () => {
   const { signIn, signUp, isLoading } = useAuth();
@@ -17,12 +16,6 @@ export const AuthScreen: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
-
-  // Backend config drawer
-  const [showConfigModal, setShowConfigModal] = useState(!isSupabaseConfigured());
-  const [customUrl, setCustomUrl] = useState(getSupabaseConfig().url);
-  const [customKey, setCustomKey] = useState(getSupabaseConfig().key);
-  const [configSuccess, setConfigSuccess] = useState(false);
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -86,18 +79,6 @@ export const AuthScreen: React.FC = () => {
     }
   };
 
-  const handleSaveConfig = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customUrl || !customKey) return;
-    setSupabaseConfig(customUrl.trim(), customKey.trim());
-    setConfigSuccess(true);
-    setTimeout(() => {
-      setConfigSuccess(false);
-      setShowConfigModal(false);
-      window.location.reload();
-    }, 800);
-  };
-
   return (
     <div className="bg-surface text-on-surface min-h-screen w-full flex flex-col items-center justify-center p-4 md:p-8 font-inter overflow-y-auto">
       <main className="w-full max-w-md my-auto">
@@ -109,28 +90,8 @@ export const AuthScreen: React.FC = () => {
             </span>
           </div>
           <h1 className="text-3xl md:text-5xl font-bold text-primary tracking-tight mb-2">Vibe</h1>
-          <p className="text-base text-on-surface-variant">Global Cross-Device Chat & Presence</p>
+          <p className="text-base text-on-surface-variant">Global Cross-Device Chat &amp; Presence</p>
         </div>
-
-        {/* Global Connection Warning if unconfigured */}
-        {!isSupabaseConfigured() && (
-          <div className="mb-4 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs flex items-start gap-3">
-            <span className="material-symbols-outlined text-xl text-amber-600 shrink-0">cloud_off</span>
-            <div className="flex-1">
-              <p className="font-semibold mb-1">Supabase Backend Setup Required</p>
-              <p className="opacity-90 mb-2">
-                Connect your Supabase project to enable global accounts across PC, mobile, and PWA with real-time sync.
-              </p>
-              <button
-                type="button"
-                onClick={() => setShowConfigModal(true)}
-                className="px-3 py-1 rounded-full bg-amber-600 text-white font-semibold text-[11px] hover:bg-amber-700 transition-colors"
-              >
-                Connect Supabase Project
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* Card */}
         <div className="bg-surface-container-lowest rounded-2xl shadow-xl border border-outline-variant/40 p-6 md:p-8 backdrop-blur-sm">
@@ -342,102 +303,7 @@ export const AuthScreen: React.FC = () => {
             </p>
           </div>
         </div>
-
-        {/* Backend status badge */}
-        <div className="mt-6 flex justify-center items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowConfigModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-container text-xs text-on-surface-variant hover:bg-surface-container-high transition-colors"
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isSupabaseConfigured() ? 'bg-green-500' : 'bg-amber-500'
-              }`}
-            ></span>
-            <span>{isSupabaseConfigured() ? 'Supabase Connected' : 'Configure Supabase Backend'}</span>
-            <span className="material-symbols-outlined text-[14px]">tune</span>
-          </button>
-        </div>
       </main>
-
-      {/* Supabase Connection Modal */}
-      {showConfigModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-surface rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-outline-variant">
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary">database</span>
-                <h3 className="font-bold text-lg text-on-surface">Supabase Backend Connection</h3>
-              </div>
-              <button
-                onClick={() => setShowConfigModal(false)}
-                className="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container"
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <p className="text-xs text-on-surface-variant mb-4">
-              Connect your Supabase project to enable authentic global user authentication, database persistence, and real-time messaging across all devices.
-            </p>
-
-            <form onSubmit={handleSaveConfig} className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-on-surface-variant mb-1">
-                  SUPABASE URL
-                </label>
-                <input
-                  type="url"
-                  value={customUrl}
-                  onChange={(e) => setCustomUrl(e.target.value)}
-                  placeholder="https://your-project.supabase.co"
-                  className="w-full px-3 py-2 text-xs border border-outline-variant rounded-lg bg-surface-container-low font-mono"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-on-surface-variant mb-1">
-                  SUPABASE ANON KEY
-                </label>
-                <input
-                  type="password"
-                  value={customKey}
-                  onChange={(e) => setCustomKey(e.target.value)}
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  className="w-full px-3 py-2 text-xs border border-outline-variant rounded-lg bg-surface-container-low font-mono"
-                  required
-                />
-              </div>
-
-              {configSuccess && (
-                <div className="p-2 rounded bg-tertiary-container text-on-tertiary-container text-xs">
-                  Configuration saved! Reloading client...
-                </div>
-              )}
-
-              <div className="flex gap-2 pt-3">
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-primary text-on-primary font-semibold text-xs hover:bg-primary-container"
-                >
-                  Save & Connect
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowConfigModal(false);
-                  }}
-                  className="px-4 py-2.5 rounded-xl border border-outline-variant text-xs text-on-surface-variant hover:bg-surface-container"
-                >
-                  Close
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

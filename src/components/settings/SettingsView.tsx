@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storageService';
-import { isSupabaseConfigured, getSupabaseConfig, setSupabaseConfig } from '../../lib/supabase';
 import { ConfirmationModal } from '../common/ConfirmationModal';
 
 export const SettingsView: React.FC = () => {
@@ -13,12 +12,6 @@ export const SettingsView: React.FC = () => {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showSignOutModal, setShowSignOutModal] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
-
-  // Supabase Config form
-  const [customUrl, setCustomUrl] = useState(getSupabaseConfig().url);
-  const [customKey, setCustomKey] = useState(getSupabaseConfig().key);
-  const [showConfig, setShowConfig] = useState(false);
-  const [configSaved, setConfigSaved] = useState(false);
 
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0] || !currentUser) return;
@@ -42,16 +35,6 @@ export const SettingsView: React.FC = () => {
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
     }
-  };
-
-  const handleSaveSupabaseConfig = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSupabaseConfig(customUrl.trim(), customKey.trim());
-    setConfigSaved(true);
-    setTimeout(() => {
-      setConfigSaved(false);
-      window.location.reload();
-    }, 800);
   };
 
   return (
@@ -138,91 +121,6 @@ export const SettingsView: React.FC = () => {
               </button>
             </div>
           </form>
-        </section>
-
-        {/* Backend & Supabase Configuration */}
-        <section className="bg-surface rounded-3xl p-6 border border-outline-variant shadow-sm mb-6">
-          <div className="flex justify-between items-center mb-2">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-primary">database</span>
-              <h2 className="text-base font-bold text-on-surface">Supabase Backend</h2>
-            </div>
-            <button
-              onClick={() => setShowConfig(!showConfig)}
-              className="text-xs font-semibold text-primary hover:underline"
-            >
-              {showConfig ? 'Hide' : 'Configure'}
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2 py-2 text-xs">
-            <div
-              className={`w-2.5 h-2.5 rounded-full ${
-                isSupabaseConfigured() ? 'bg-tertiary-fixed-dim' : 'bg-secondary'
-              }`}
-            ></div>
-            <span className="font-medium text-on-surface">
-              {isSupabaseConfigured()
-                ? 'Connected to live Supabase project'
-                : 'Using local persistence mode'}
-            </span>
-          </div>
-
-          {showConfig && (
-            <form onSubmit={handleSaveSupabaseConfig} className="space-y-3 mt-4 pt-4 border-t border-outline-variant">
-              <div>
-                <label className="block text-xs font-semibold text-on-surface-variant mb-1">
-                  SUPABASE URL
-                </label>
-                <input
-                  type="url"
-                  value={customUrl}
-                  onChange={(e) => setCustomUrl(e.target.value)}
-                  placeholder="https://your-project.supabase.co"
-                  className="w-full px-3 py-2 text-xs border border-outline-variant rounded-xl bg-surface-container-low font-mono"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-on-surface-variant mb-1">
-                  SUPABASE ANON KEY
-                </label>
-                <input
-                  type="password"
-                  value={customKey}
-                  onChange={(e) => setCustomKey(e.target.value)}
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  className="w-full px-3 py-2 text-xs border border-outline-variant rounded-xl bg-surface-container-low font-mono"
-                  required
-                />
-              </div>
-
-              {configSaved && (
-                <div className="p-2 rounded bg-tertiary-container text-on-tertiary-container text-xs">
-                  Settings saved! Reloading client...
-                </div>
-              )}
-
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-full bg-primary text-on-primary font-semibold text-xs"
-                >
-                  Save &amp; Reload
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    alert('Full SQL migration schema is available at /supabase/schema.sql in this project.');
-                  }}
-                  className="px-4 py-2 rounded-full border border-outline-variant text-xs font-semibold text-on-surface-variant"
-                >
-                  Copy SQL Migration
-                </button>
-              </div>
-            </form>
-          )}
         </section>
 
         {/* PWA & App Details */}

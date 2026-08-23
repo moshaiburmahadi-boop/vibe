@@ -93,11 +93,10 @@ export const authService = {
 
     try {
       const phoneEmail = getPhoneAuthEmail(normalizedPhone);
-
-      // Attempt 1: Standard shadow email registration (Universal phone auth without SMS gateway costs)
       let authUser: any = null;
       let authSession: any = null;
 
+      // Primary Attempt: Standard shadow email registration
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: phoneEmail,
         password,
@@ -111,7 +110,26 @@ export const authService = {
       });
 
       if (signUpError) {
-        // Fallback: If phone provider is enabled on Supabase
+        const errorMsg = (signUpError.message || '').toLowerCase();
+        
+        // If user is already registered in Supabase Auth, attempt direct sign in
+        if (
+          errorMsg.includes('already registered') ||
+          errorMsg.includes('user already exists') ||
+          errorMsg.includes('identity already exists')
+        ) {
+          const signInRes = await this.signIn(normalizedPhone, password);
+          if (signInRes.profile && !signInRes.error) {
+            return signInRes;
+          }
+          return {
+            user: null,
+            profile: null,
+            error: new Error('An account with this phone number already exists. Please sign in with your password.'),
+          };
+        }
+
+        // Fallback: If native phone provider is enabled in project
         const { data: phoneSignUpData, error: phoneSignUpErr } = await supabase.auth.signUp({
           phone: normalizedPhone,
           password,
@@ -139,29 +157,36 @@ export const authService = {
         return { user: null, profile: null, error: new Error('Failed to create account. Please try again.') };
       }
 
-      // If signup did not automatically establish a session, immediately log in
+      // If signup did not automatically establish a session, try immediate sign in
       if (!authSession) {
-        const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
-          email: phoneEmail,
-          password,
-        });
+        try {
+          const { data: signInData } = await supabase.auth.signInWithPassword({
+            email: phoneEmail,
+            password,
+          });
 
-        if (!signInErr && signInData.session) {
-          authSession = signInData.session;
-          authUser = signInData.user;
+          if (signInData?.session) {
+            authSession = signInData.session;
+            authUser = signInData.user;
+          }
+        } catch (e) {
+          // Non-blocking fallback
         }
       }
 
       const userId = authUser.id;
 
-      // Construct and upsert user profile record into public.profiles (profiles.user_id = auth.users.id)
+      // Construct user profile
       const newProfile: UserProfile = {
         id: userId,
         user_id: userId,
         full_name: fullName.trim(),
         phone_number: normalizedPhone,
-        username: fullName.toLowerCase().replace(/\s+/g, '_') + '_' + Math.floor(100 + Math.random() * 900),
-        avatar_url: avatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
+        username:
+          fullName.toLowerCase().replace(/\s+/g, '_') + '_' + Math.floor(100 + Math.random() * 900),
+        avatar_url:
+          avatarUrl ||
+          `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
         about: 'Hey there! I am using Vibe.',
         is_online: true,
         last_seen: new Date().toISOString(),
@@ -169,12 +194,26 @@ export const authService = {
         updated_at: new Date().toISOString(),
       };
 
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .upsert(newProfile, { onConflict: 'user_id' });
+      // Persist profile to Supabase public.profiles table
+      try {
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .upsert(newProfile, { onConflict: 'user_id' });
 
-      if (profileError) {
-        console.warn('Profile upsert notice:', profileError.message);
+        if (profileError) {
+          console.warn('Profile upsert notice:', profileError.message);
+        }
+      } catch (err) {
+        console.warn('Profile database sync notice:', err);
+      }
+
+      // Cache current profile locally for immediate and offline session resilience
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('vibe_current_profile', JSON.stringify(newProfile));
+        } catch (e) {
+          // Storage quota
+        }
       }
 
       return { user: authUser, profile: newProfile, error: null };
@@ -286,6 +325,15 @@ export const authService = {
         profile = fallbackProfile;
       }
 
+      // Cache profile locally
+      if (profile && typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('vibe_current_profile', JSON.stringify(profile));
+        } catch (e) {
+          // Ignore
+        }
+      }
+
       return { user: authUser, profile, error: null };
     } catch (err: any) {
       return { user: null, profile: null, error: mapAuthError(err) };
@@ -299,16 +347,59 @@ export const authService = {
         return { userId: null, profile: null };
       }
 
+      // Check Supabase session first
       const { data, error } = await supabase.auth.getSession();
-      if (error || !data.session?.user) {
-        return { userId: null, profile: null };
+      if (!error && data.session?.user) {
+        const user = data.session.user;
+        const profile = await this.getProfile(user.id);
+        if (profile) {
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem('vibe_current_profile', JSON.stringify(profile));
+            } catch (e) {
+              // Ignore
+            }
+          }
+          return { userId: user.id, profile };
+        }
       }
 
-      const user = data.session.user;
-      const profile = await this.getProfile(user.id);
+      // Fallback: Check cached persistent profile
+      if (typeof window !== 'undefined') {
+        const cachedRaw = localStorage.getItem('vibe_current_profile');
+        if (cachedRaw) {
+          try {
+            const cachedProfile = JSON.parse(cachedRaw) as UserProfile;
+            if (cachedProfile && cachedProfile.user_id) {
+              // Refresh in background
+              this.getProfile(cachedProfile.user_id).then((fresh) => {
+                if (fresh) {
+                  localStorage.setItem('vibe_current_profile', JSON.stringify(fresh));
+                }
+              }).catch(() => {});
 
-      return { userId: user.id, profile };
+              return { userId: cachedProfile.user_id, profile: cachedProfile };
+            }
+          } catch (e) {
+            localStorage.removeItem('vibe_current_profile');
+          }
+        }
+      }
+
+      return { userId: null, profile: null };
     } catch (e) {
+      // Local fallback on network error
+      if (typeof window !== 'undefined') {
+        const cachedRaw = localStorage.getItem('vibe_current_profile');
+        if (cachedRaw) {
+          try {
+            const cachedProfile = JSON.parse(cachedRaw) as UserProfile;
+            return { userId: cachedProfile.user_id, profile: cachedProfile };
+          } catch (err) {
+            // Ignore
+          }
+        }
+      }
       return { userId: null, profile: null };
     }
   },
@@ -406,13 +497,20 @@ export const authService = {
     } catch (err) {
       console.warn('Sign out notice:', err);
     } finally {
-      // Clean up any lingering auth keys in localStorage / sessionStorage
+      // Clean up any lingering auth keys and cached user profile in localStorage / sessionStorage
       if (typeof window !== 'undefined') {
         try {
+          localStorage.removeItem('vibe_current_profile');
           const keysToRemove: string[] = [];
           for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key && (key.startsWith('sb-') || key.includes('auth-token') || key.includes('supabase.auth.'))) {
+            if (
+              key &&
+              (key.startsWith('sb-') ||
+                key.includes('auth-token') ||
+                key.includes('supabase.auth.') ||
+                key.startsWith('vibe_current_'))
+            ) {
               keysToRemove.push(key);
             }
           }
