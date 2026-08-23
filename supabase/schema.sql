@@ -237,6 +237,24 @@ SELECT public.sync_user_profiles();
 -- 11. ROW LEVEL SECURITY (RLS) POLICIES — NON-RECURSIVE & SECURE
 -- ==============================================================================
 
+-- 11.0 SECURITY DEFINER Helper to avoid recursive RLS policy loops
+CREATE OR REPLACE FUNCTION public.is_member_of(_conversation_id uuid, _user_id uuid)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.conversation_members
+    WHERE conversation_id = _conversation_id
+      AND user_id = _user_id
+  );
+$$;
+
+GRANT EXECUTE ON FUNCTION public.is_member_of(uuid, uuid) TO authenticated, anon;
+
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.contact_requests ENABLE ROW LEVEL SECURITY;
@@ -245,13 +263,24 @@ ALTER TABLE public.conversation_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.message_reads ENABLE ROW LEVEL SECURITY;
 
--- 11.1 Profiles Policies
-DROP POLICY IF EXISTS "Public profiles are readable by authenticated users" ON public.profiles;
-DROP POLICY IF EXISTS "Public profiles are readable by anyone" ON public.profiles;
-DROP POLICY IF EXISTS "Users can update their own profile" ON public.profiles;
-DROP POLICY IF EXISTS "Users can insert their own profile" ON public.profiles;
-DROP POLICY IF EXISTS "Users can manage their own profile" ON public.profiles;
+-- Drop all existing policies on conversations, conversation_members, messages, and message_reads
+DO $$
+DECLARE
+    pol record;
+BEGIN
+    FOR pol IN (
+      SELECT policyname, tablename 
+      FROM pg_policies 
+      WHERE schemaname = 'public' 
+        AND tablename IN ('conversations', 'conversation_members', 'messages', 'message_reads', 'contacts', 'contact_requests', 'profiles')
+    )
+    LOOP
+        EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', pol.policyname, pol.tablename);
+    END LOOP;
+END
+$$;
 
+-- 11.1 Profiles Policies
 CREATE POLICY "Public profiles are readable by authenticated users"
 ON public.profiles FOR SELECT TO authenticated, anon USING (true);
 
@@ -263,9 +292,6 @@ ON public.profiles FOR UPDATE TO authenticated, anon
 USING (auth.uid() = user_id OR auth.uid() = id OR auth.uid() IS NULL);
 
 -- 11.2 Contacts Policies
-DROP POLICY IF EXISTS "Users can view their own contacts" ON public.contacts;
-DROP POLICY IF EXISTS "Users can manage their own contacts" ON public.contacts;
-
 CREATE POLICY "Users can view their own contacts"
 ON public.contacts FOR SELECT TO authenticated, anon USING (true);
 
@@ -273,11 +299,6 @@ CREATE POLICY "Users can manage their own contacts"
 ON public.contacts FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
 
 -- 11.3 Contact Requests Policies
-DROP POLICY IF EXISTS "Users can view contact requests they sent or received" ON public.contact_requests;
-DROP POLICY IF EXISTS "Users can send contact requests" ON public.contact_requests;
-DROP POLICY IF EXISTS "Receivers can update contact requests" ON public.contact_requests;
-DROP POLICY IF EXISTS "Users can delete their contact requests" ON public.contact_requests;
-
 CREATE POLICY "Users can view contact requests"
 ON public.contact_requests FOR SELECT TO authenticated, anon USING (true);
 
@@ -290,67 +311,86 @@ ON public.contact_requests FOR UPDATE TO authenticated, anon USING (true);
 CREATE POLICY "Users can delete contact requests"
 ON public.contact_requests FOR DELETE TO authenticated, anon USING (true);
 
--- 11.4 Conversation Policies
-DROP POLICY IF EXISTS "Users can view conversations they are member of" ON public.conversations;
-DROP POLICY IF EXISTS "Users can view conversations" ON public.conversations;
-DROP POLICY IF EXISTS "Authenticated users can create conversations" ON public.conversations;
-DROP POLICY IF EXISTS "Members can update conversations" ON public.conversations;
-
+-- 11.4 Conversation Policies (Using is_member_of to eliminate recursion)
 CREATE POLICY "Users can view conversations"
-ON public.conversations FOR SELECT TO authenticated, anon USING (true);
+ON public.conversations FOR SELECT TO authenticated, anon
+USING (auth.uid() IS NULL OR public.is_member_of(id, auth.uid()));
 
 CREATE POLICY "Users can create conversations"
-ON public.conversations FOR INSERT TO authenticated, anon WITH CHECK (true);
+ON public.conversations FOR INSERT TO authenticated, anon
+WITH CHECK (true);
 
 CREATE POLICY "Users can update conversations"
-ON public.conversations FOR UPDATE TO authenticated, anon USING (true);
+ON public.conversations FOR UPDATE TO authenticated, anon
+USING (auth.uid() IS NULL OR public.is_member_of(id, auth.uid()));
 
 CREATE POLICY "Users can delete conversations"
-ON public.conversations FOR DELETE TO authenticated, anon USING (true);
+ON public.conversations FOR DELETE TO authenticated, anon
+USING (auth.uid() IS NULL OR public.is_member_of(id, auth.uid()));
 
--- 11.5 Conversation Members Policies (Non-recursive)
-DROP POLICY IF EXISTS "Users can view conversation members of their chats" ON public.conversation_members;
-DROP POLICY IF EXISTS "Users can view conversation members" ON public.conversation_members;
-DROP POLICY IF EXISTS "Users can insert conversation members" ON public.conversation_members;
-DROP POLICY IF EXISTS "Users can delete conversation members" ON public.conversation_members;
-
+-- 11.5 Conversation Members Policies (Non-recursive via SECURITY DEFINER is_member_of)
 CREATE POLICY "Users can view conversation members"
-ON public.conversation_members FOR SELECT TO authenticated, anon USING (true);
+ON public.conversation_members FOR SELECT TO authenticated, anon
+USING (
+  auth.uid() IS NULL 
+  OR user_id = auth.uid() 
+  OR public.is_member_of(conversation_id, auth.uid())
+);
 
 CREATE POLICY "Users can insert conversation members"
-ON public.conversation_members FOR INSERT TO authenticated, anon WITH CHECK (true);
+ON public.conversation_members FOR INSERT TO authenticated, anon
+WITH CHECK (
+  auth.uid() IS NULL 
+  OR user_id = auth.uid() 
+  OR public.is_member_of(conversation_id, auth.uid()) 
+  OR (auth.role() = 'authenticated')
+);
+
+CREATE POLICY "Users can update conversation members"
+ON public.conversation_members FOR UPDATE TO authenticated, anon
+USING (
+  auth.uid() IS NULL 
+  OR user_id = auth.uid() 
+  OR public.is_member_of(conversation_id, auth.uid())
+);
 
 CREATE POLICY "Users can delete conversation members"
-ON public.conversation_members FOR DELETE TO authenticated, anon USING (true);
+ON public.conversation_members FOR DELETE TO authenticated, anon
+USING (
+  auth.uid() IS NULL 
+  OR user_id = auth.uid() 
+  OR public.is_member_of(conversation_id, auth.uid())
+);
 
 -- 11.6 Messages Policies
-DROP POLICY IF EXISTS "Users can view messages in their conversations" ON public.messages;
-DROP POLICY IF EXISTS "Users can view messages" ON public.messages;
-DROP POLICY IF EXISTS "Users can insert messages into their conversations" ON public.messages;
-DROP POLICY IF EXISTS "Users can insert messages" ON public.messages;
-DROP POLICY IF EXISTS "Users can update/delete their own messages" ON public.messages;
-
 CREATE POLICY "Users can view messages"
-ON public.messages FOR SELECT TO authenticated, anon USING (true);
+ON public.messages FOR SELECT TO authenticated, anon
+USING (auth.uid() IS NULL OR public.is_member_of(conversation_id, auth.uid()));
 
 CREATE POLICY "Users can insert messages"
-ON public.messages FOR INSERT TO authenticated, anon WITH CHECK (true);
+ON public.messages FOR INSERT TO authenticated, anon
+WITH CHECK (
+  auth.uid() IS NULL 
+  OR (sender_id = auth.uid() AND public.is_member_of(conversation_id, auth.uid()))
+  OR (auth.role() = 'authenticated')
+);
 
 CREATE POLICY "Users can update messages"
-ON public.messages FOR UPDATE TO authenticated, anon USING (true);
+ON public.messages FOR UPDATE TO authenticated, anon
+USING (auth.uid() IS NULL OR sender_id = auth.uid());
 
 CREATE POLICY "Users can delete messages"
-ON public.messages FOR DELETE TO authenticated, anon USING (true);
+ON public.messages FOR DELETE TO authenticated, anon
+USING (auth.uid() IS NULL OR sender_id = auth.uid());
 
 -- 11.7 Message Reads Policies
-DROP POLICY IF EXISTS "Users can view reads in their conversations" ON public.message_reads;
-DROP POLICY IF EXISTS "Users can mark messages as read" ON public.message_reads;
-
 CREATE POLICY "Users can view message reads"
-ON public.message_reads FOR SELECT TO authenticated, anon USING (true);
+ON public.message_reads FOR SELECT TO authenticated, anon
+USING (auth.uid() IS NULL OR public.is_member_of(conversation_id, auth.uid()));
 
 CREATE POLICY "Users can mark messages as read"
-ON public.message_reads FOR INSERT TO authenticated, anon WITH CHECK (true);
+ON public.message_reads FOR INSERT TO authenticated, anon
+WITH CHECK (auth.uid() IS NULL OR user_id = auth.uid());
 
 -- ==============================================================================
 -- 12. STORAGE BUCKETS SETUP
