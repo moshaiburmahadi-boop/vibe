@@ -292,11 +292,20 @@ ON public.profiles FOR UPDATE TO authenticated, anon
 USING (auth.uid() = user_id OR auth.uid() = id OR auth.uid() IS NULL);
 
 -- 11.2 Contacts Policies
-CREATE POLICY "Users can view their own contacts"
+CREATE POLICY "Users can view contacts"
 ON public.contacts FOR SELECT TO authenticated, anon USING (true);
 
-CREATE POLICY "Users can manage their own contacts"
-ON public.contacts FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
+CREATE POLICY "Users can insert contacts"
+ON public.contacts FOR INSERT TO authenticated, anon
+WITH CHECK (auth.uid() IS NULL OR user_id = auth.uid() OR auth.role() = 'authenticated');
+
+CREATE POLICY "Users can update contacts"
+ON public.contacts FOR UPDATE TO authenticated, anon
+USING (auth.uid() IS NULL OR user_id = auth.uid());
+
+CREATE POLICY "Users can delete contacts"
+ON public.contacts FOR DELETE TO authenticated, anon
+USING (auth.uid() IS NULL OR user_id = auth.uid());
 
 -- 11.3 Contact Requests Policies
 CREATE POLICY "Users can view contact requests"
@@ -383,14 +392,22 @@ CREATE POLICY "Users can delete messages"
 ON public.messages FOR DELETE TO authenticated, anon
 USING (auth.uid() IS NULL OR sender_id = auth.uid());
 
--- 11.7 Message Reads Policies
+-- 11.7 Message Reads Policies (Table has id, message_id, user_id, read_at)
 CREATE POLICY "Users can view message reads"
 ON public.message_reads FOR SELECT TO authenticated, anon
-USING (auth.uid() IS NULL OR public.is_member_of(conversation_id, auth.uid()));
+USING (true);
 
 CREATE POLICY "Users can mark messages as read"
 ON public.message_reads FOR INSERT TO authenticated, anon
-WITH CHECK (auth.uid() IS NULL OR user_id = auth.uid());
+WITH CHECK (auth.uid() IS NULL OR user_id = auth.uid() OR auth.role() = 'authenticated');
+
+CREATE POLICY "Users can update message reads"
+ON public.message_reads FOR UPDATE TO authenticated, anon
+USING (auth.uid() IS NULL OR user_id = auth.uid());
+
+CREATE POLICY "Users can delete message reads"
+ON public.message_reads FOR DELETE TO authenticated, anon
+USING (auth.uid() IS NULL OR user_id = auth.uid());
 
 -- ==============================================================================
 -- 12. STORAGE BUCKETS SETUP
