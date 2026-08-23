@@ -106,13 +106,61 @@ export const chatService = {
     currentUserId: string,
     targetUserId: string
   ): Promise<{ conversation: Conversation | null; error: Error | null }> {
-    if (!isSupabaseConfigured()) {
-      return { conversation: null, error: new Error('Supabase not configured') };
+    if (!isSupabaseConfigured() || !currentUserId || !targetUserId) {
+      return { conversation: null, error: new Error('Supabase not configured or missing user ID') };
     }
 
     try {
+      // Option 1: Try database RPC if deployed
+      try {
+        const { data: rpcRes, error: rpcErr } = await supabase.rpc('get_or_create_direct_chat', {
+          p_current_user_id: currentUserId,
+          p_target_user_id: targetUserId,
+        });
+
+        if (!rpcErr && rpcRes && rpcRes.conversation_id) {
+          const directConvId = rpcRes.conversation_id;
+          const { data: convData } = await supabase
+            .from('conversations')
+            .select('*')
+            .eq('id', directConvId)
+            .maybeSingle();
+
+          const { data: targetProf } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('user_id', targetUserId)
+            .maybeSingle();
+
+          const { data: msgData } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', directConvId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          const fullConv: Conversation = {
+            ...(convData || {
+              id: directConvId,
+              conversation_type: 'direct',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }),
+            members: [],
+            other_member: targetProf as UserProfile,
+            last_message: msgData ? (msgData as Message) : null,
+            unread_count: 0,
+          };
+
+          return { conversation: fullConv, error: null };
+        }
+      } catch (e) {
+        // Fallback to table queries below
+      }
+
+      // Option 2: Table queries
       // Step 1: Check if a direct conversation already exists between currentUserId and targetUserId
-      // Case A: Both are currently in conversation_members
       const { data: myConvs } = await supabase
         .from('conversation_members')
         .select('conversation_id')
@@ -129,12 +177,24 @@ export const chatService = {
           .in('conversation_id', myConvIds);
 
         if (targetConvs && targetConvs.length > 0) {
-          directConvId = targetConvs[0].conversation_id;
+          // Verify direct conversation
+          const { data: directMatch } = await supabase
+            .from('conversations')
+            .select('id')
+            .in('id', targetConvs.map((t) => t.conversation_id))
+            .eq('conversation_type', 'direct')
+            .limit(1)
+            .maybeSingle();
+
+          if (directMatch) {
+            directConvId = directMatch.id;
+          } else {
+            directConvId = targetConvs[0].conversation_id;
+          }
         }
       }
 
-      // Case B: If not found via active membership (e.g. current user deleted the chat previously),
-      // check target user's direct conversations to avoid creating a duplicate direct conversation
+      // Case B: If current user removed it earlier, check target user's active direct conversations
       if (!directConvId) {
         const { data: targetMemberRows } = await supabase
           .from('conversation_members')
@@ -151,7 +211,6 @@ export const chatService = {
 
           if (directConvs && directConvs.length > 0) {
             for (const dConv of directConvs) {
-              // Check if messages in this conversation were exchanged between current and target user
               const { data: msgSample } = await supabase
                 .from('messages')
                 .select('id')
@@ -163,6 +222,9 @@ export const chatService = {
                 directConvId = dConv.id;
                 break;
               }
+            }
+            if (!directConvId && directConvs.length === 1) {
+              directConvId = directConvs[0].id;
             }
           }
         }
@@ -203,13 +265,13 @@ export const chatService = {
           .from('conversations')
           .select('*')
           .eq('id', directConvId)
-          .single();
+          .maybeSingle();
 
         const { data: targetProf } = await supabase
           .from('profiles')
           .select('*')
           .eq('user_id', targetUserId)
-          .single();
+          .maybeSingle();
 
         // Get last message if any
         const { data: msgData } = await supabase
@@ -221,7 +283,12 @@ export const chatService = {
           .maybeSingle();
 
         const fullConv: Conversation = {
-          ...convData,
+          ...(convData || {
+            id: directConvId,
+            conversation_type: 'direct',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }),
           members: [],
           other_member: targetProf as UserProfile,
           last_message: msgData ? (msgData as Message) : null,
@@ -241,7 +308,7 @@ export const chatService = {
         return { conversation: null, error: convError };
       }
 
-      // Step 3: Add members to conversation
+      // Step 3: Add both members to conversation
       await supabase.from('conversation_members').insert([
         { conversation_id: newConvData.id, user_id: currentUserId },
         { conversation_id: newConvData.id, user_id: targetUserId },
@@ -251,7 +318,7 @@ export const chatService = {
         .from('profiles')
         .select('*')
         .eq('user_id', targetUserId)
-        .single();
+        .maybeSingle();
 
       const created: Conversation = {
         ...newConvData,
@@ -264,6 +331,82 @@ export const chatService = {
       return { conversation: created, error: null };
     } catch (err: any) {
       return { conversation: null, error: err };
+    }
+  },
+
+  // Remove direct chat for current user (hides from current user's chats while preserving conversation & partner's chat)
+  async removeDirectChat(
+    currentUserId: string,
+    targetUserId: string
+  ): Promise<{ error: Error | null }> {
+    if (!isSupabaseConfigured() || !currentUserId || !targetUserId) {
+      return { error: new Error('Missing user ID') };
+    }
+
+    try {
+      // Option 1: Try database RPC if available
+      try {
+        const { error: rpcErr } = await supabase.rpc('remove_direct_chat', {
+          p_current_user_id: currentUserId,
+          p_target_user_id: targetUserId,
+        });
+        if (!rpcErr) {
+          return { error: null };
+        }
+      } catch (e) {
+        // Fallback to table queries below
+      }
+
+      // Option 2: Table delete on conversation_members
+      const { data: myMemberships } = await supabase
+        .from('conversation_members')
+        .select('conversation_id')
+        .eq('user_id', currentUserId);
+
+      if (!myMemberships || myMemberships.length === 0) {
+        return { error: null };
+      }
+
+      const myConvIds = myMemberships.map((m) => m.conversation_id);
+
+      const { data: targetMemberships } = await supabase
+        .from('conversation_members')
+        .select('conversation_id')
+        .eq('user_id', targetUserId)
+        .in('conversation_id', myConvIds);
+
+      const matchedConvIds = (targetMemberships || []).map((t) => t.conversation_id);
+
+      if (matchedConvIds.length > 0) {
+        const { error } = await supabase
+          .from('conversation_members')
+          .delete()
+          .eq('user_id', currentUserId)
+          .in('conversation_id', matchedConvIds);
+
+        return { error: error || null };
+      }
+
+      // If no intersection in active memberships, delete current user's membership for direct conversations
+      const { data: directConvs } = await supabase
+        .from('conversations')
+        .select('id')
+        .in('id', myConvIds)
+        .eq('conversation_type', 'direct');
+
+      if (directConvs && directConvs.length > 0) {
+        const { error } = await supabase
+          .from('conversation_members')
+          .delete()
+          .eq('user_id', currentUserId)
+          .in('conversation_id', directConvs.map((c) => c.id));
+
+        return { error: error || null };
+      }
+
+      return { error: null };
+    } catch (err: any) {
+      return { error: err };
     }
   },
 

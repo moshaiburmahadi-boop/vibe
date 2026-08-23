@@ -7,12 +7,13 @@ import { isSupabaseConfigured, supabase } from '../../lib/supabase';
 import { getPhoneDigits } from '../../utils/phoneUtils';
 
 export const ContactsView: React.FC = () => {
-  const { currentUser, setActiveConversation, setActiveTab, startCall } = useAuth();
+  const { currentUser, setActiveConversation, setActiveTab, activeConversation, startCall } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [activeChatUserIds, setActiveChatUserIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [addingUserId, setAddingUserId] = useState<string | null>(null);
+  const [processingUserId, setProcessingUserId] = useState<string | null>(null);
+  const [processingAction, setProcessingAction] = useState<'add' | 'remove' | null>(null);
 
   // Add Contact Modal (Find User by Phone)
   const [showAddModal, setShowAddModal] = useState(false);
@@ -84,26 +85,82 @@ export const ContactsView: React.FC = () => {
     }
   }, [loadContactsAndChats, currentUser]);
 
-  // Add Contact to Chat or Open Existing Chat
+  // Add Contact to Chat
   const handleAddToChat = async (targetUser: UserProfile) => {
-    if (!currentUser) return;
-    setAddingUserId(targetUser.user_id);
+    if (!currentUser || processingUserId) return;
+    setProcessingUserId(targetUser.user_id);
+    setProcessingAction('add');
     try {
       const { conversation, error } = await chatService.getOrCreateDirectConversation(
         currentUser.user_id,
         targetUser.user_id
       );
-      if (conversation && !error) {
+      if (error) {
+        console.error('Failed to add to chat:', error);
+        alert('Could not add to chat: ' + (error.message || 'Please try again.'));
+        return;
+      }
+      if (conversation) {
+        // Immediately reflect in UI
+        setActiveChatUserIds((prev) => new Set([...Array.from(prev), targetUser.user_id]));
+      }
+    } catch (err: any) {
+      console.error('Add to chat error:', err);
+      alert('Failed to add to chat: ' + (err.message || 'Error occurred.'));
+    } finally {
+      setProcessingUserId(null);
+      setProcessingAction(null);
+    }
+  };
+
+  // Remove Contact from Chat
+  const handleRemoveFromChat = async (targetUser: UserProfile) => {
+    if (!currentUser || processingUserId) return;
+    setProcessingUserId(targetUser.user_id);
+    setProcessingAction('remove');
+    try {
+      const { error } = await chatService.removeDirectChat(
+        currentUser.user_id,
+        targetUser.user_id
+      );
+      if (error) {
+        console.error('Failed to remove from chat:', error);
+        alert('Could not remove from chat: ' + (error.message || 'Please try again.'));
+        return;
+      }
+      // Immediately reflect in UI
+      setActiveChatUserIds((prev) => {
+        const next = new Set(prev);
+        next.delete(targetUser.user_id);
+        return next;
+      });
+      if (activeConversation?.other_member?.user_id === targetUser.user_id) {
+        setActiveConversation(null);
+      }
+    } catch (err: any) {
+      console.error('Remove from chat error:', err);
+      alert('Failed to remove from chat: ' + (err.message || 'Error occurred.'));
+    } finally {
+      setProcessingUserId(null);
+      setProcessingAction(null);
+    }
+  };
+
+  // Open Chat directly when clicking user row
+  const handleOpenChat = async (targetUser: UserProfile) => {
+    if (!currentUser) return;
+    try {
+      const { conversation } = await chatService.getOrCreateDirectConversation(
+        currentUser.user_id,
+        targetUser.user_id
+      );
+      if (conversation) {
         setActiveChatUserIds((prev) => new Set([...Array.from(prev), targetUser.user_id]));
         setActiveConversation(conversation);
         setActiveTab('chats');
-      } else {
-        console.error('Failed to add to chat:', error);
       }
     } catch (err) {
-      console.error('Add to chat error:', err);
-    } finally {
-      setAddingUserId(null);
+      console.error('Open chat error:', err);
     }
   };
 
@@ -289,7 +346,7 @@ export const ContactsView: React.FC = () => {
                       `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`;
                     const isOnline = user.is_online;
                     const isInChat = activeChatUserIds.has(user.user_id);
-                    const isAdding = addingUserId === user.user_id;
+                    const isProcessing = processingUserId === user.user_id;
 
                     return (
                       <div
@@ -297,7 +354,7 @@ export const ContactsView: React.FC = () => {
                         className="flex items-center justify-between p-3.5 bg-surface rounded-2xl border border-outline-variant/60 hover:bg-surface-container-low transition-colors shadow-sm gap-3"
                       >
                         <div
-                          onClick={() => handleAddToChat(user)}
+                          onClick={() => handleOpenChat(user)}
                           className="flex items-center gap-3.5 cursor-pointer min-w-0 flex-1"
                         >
                           <div className="relative w-11 h-11 rounded-full shrink-0">
@@ -329,26 +386,41 @@ export const ContactsView: React.FC = () => {
                         <div className="flex items-center gap-2 shrink-0">
                           {isInChat ? (
                             <button
-                              onClick={() => handleAddToChat(user)}
-                              title="Open Chat"
-                              className="px-3.5 py-1.5 rounded-full bg-primary-container/20 text-primary hover:bg-primary hover:text-on-primary transition-colors text-xs font-semibold flex items-center gap-1 shadow-sm"
+                              onClick={() => handleRemoveFromChat(user)}
+                              disabled={isProcessing}
+                              title="Remove from Chat"
+                              className="px-3.5 py-1.5 rounded-full bg-surface-container text-on-surface hover:bg-error/10 hover:text-error hover:border-error/40 border border-outline-variant transition-all active:scale-95 text-xs font-semibold flex items-center gap-1 shadow-sm disabled:opacity-50"
                             >
-                              <span className="material-symbols-outlined text-base">chat</span>
-                              <span>Open Chat</span>
+                              {isProcessing && processingAction === 'remove' ? (
+                                <>
+                                  <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                                  <span>Removing...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="material-symbols-outlined text-base">person_remove</span>
+                                  <span>Remove from Chat</span>
+                                </>
+                              )}
                             </button>
                           ) : (
                             <button
                               onClick={() => handleAddToChat(user)}
-                              disabled={isAdding}
+                              disabled={isProcessing}
                               title="Add to Chat"
                               className="px-3.5 py-1.5 rounded-full bg-primary text-on-primary hover:bg-primary-container transition-transform active:scale-95 text-xs font-semibold flex items-center gap-1 shadow-sm disabled:opacity-50"
                             >
-                              {isAdding ? (
-                                <div className="w-3.5 h-3.5 border-2 border-on-primary border-t-transparent rounded-full animate-spin"></div>
+                              {isProcessing && processingAction === 'add' ? (
+                                <>
+                                  <div className="w-3.5 h-3.5 border-2 border-on-primary border-t-transparent rounded-full animate-spin"></div>
+                                  <span>Adding...</span>
+                                </>
                               ) : (
-                                <span className="material-symbols-outlined text-base">add_comment</span>
+                                <>
+                                  <span className="material-symbols-outlined text-base">add_comment</span>
+                                  <span>Add to Chat</span>
+                                </>
                               )}
-                              <span>Add to Chat</span>
                             </button>
                           )}
 
@@ -469,20 +541,41 @@ export const ContactsView: React.FC = () => {
                 <div className="w-full sm:w-auto flex items-center gap-2 justify-end">
                   {searchResult.relationship === 'self' ? (
                     <span className="text-xs font-medium text-primary px-3 py-1.5 rounded-full bg-primary/10">You</span>
+                  ) : activeChatUserIds.has(searchResult.profile.user_id) ? (
+                    <button
+                      onClick={() => handleRemoveFromChat(searchResult.profile!)}
+                      disabled={processingUserId === searchResult.profile.user_id}
+                      className="px-4 py-2 rounded-full bg-surface-container text-on-surface hover:bg-error/10 hover:text-error hover:border-error/40 border border-outline-variant text-xs font-semibold shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {processingUserId === searchResult.profile.user_id && processingAction === 'remove' ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                          <span>Removing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="material-symbols-outlined text-sm">person_remove</span>
+                          <span>Remove from Chat</span>
+                        </>
+                      )}
+                    </button>
                   ) : (
                     <button
-                      onClick={() => {
-                        setShowAddModal(false);
-                        handleAddToChat(searchResult.profile!);
-                      }}
-                      className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm flex items-center gap-1"
+                      onClick={() => handleAddToChat(searchResult.profile!)}
+                      disabled={processingUserId === searchResult.profile.user_id}
+                      className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container shadow-sm flex items-center gap-1.5 disabled:opacity-50"
                     >
-                      <span className="material-symbols-outlined text-sm">chat</span>
-                      <span>
-                        {activeChatUserIds.has(searchResult.profile.user_id)
-                          ? 'Open Chat'
-                          : 'Add to Chat'}
-                      </span>
+                      {processingUserId === searchResult.profile.user_id && processingAction === 'add' ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-on-primary border-t-transparent rounded-full animate-spin"></div>
+                          <span>Adding...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="material-symbols-outlined text-sm">add_comment</span>
+                          <span>Add to Chat</span>
+                        </>
+                      )}
                     </button>
                   )}
                 </div>
