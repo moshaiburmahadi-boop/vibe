@@ -3,8 +3,9 @@ import { useAuth } from '../../context/AuthContext';
 import { storageService } from '../../services/storageService';
 
 export const AuthScreen: React.FC = () => {
-  const { signIn, signUp, isLoading } = useAuth();
+  const { signIn, signUp } = useAuth();
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Form fields
   const [phone, setPhone] = useState('');
@@ -30,52 +31,65 @@ export const AuthScreen: React.FC = () => {
     setErrorMessage('');
 
     if (!phone.trim()) {
-      setErrorMessage('Please enter your phone number');
+      setErrorMessage('Please enter your phone number.');
       return;
     }
 
     if (!password) {
-      setErrorMessage('Please enter your password');
+      setErrorMessage('Please enter your password.');
       return;
     }
 
     if (isSignUp) {
       if (!fullName.trim()) {
-        setErrorMessage('Please enter your full name');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setErrorMessage('Passwords do not match');
+        setErrorMessage('Please enter your full name.');
         return;
       }
       if (password.length < 6) {
-        setErrorMessage('Password must be at least 6 characters');
+        setErrorMessage('Password must be at least 6 characters.');
         return;
       }
+      if (password !== confirmPassword) {
+        setErrorMessage('Passwords do not match.');
+        return;
+      }
+    }
 
-      let avatarUrl = '';
-      if (avatarFile) {
-        const uploadRes = await storageService.uploadAvatar(avatarFile, `temp_${Date.now()}`);
-        if (uploadRes.url) {
-          avatarUrl = uploadRes.url;
+    setIsSubmitting(true);
+    try {
+      if (isSignUp) {
+        let avatarUrl = '';
+        if (avatarFile) {
+          try {
+            const uploadRes = await storageService.uploadAvatar(avatarFile, `temp_${Date.now()}`);
+            if (uploadRes.url) {
+              avatarUrl = uploadRes.url;
+            }
+          } catch (uploadErr) {
+            console.warn('Avatar upload notice:', uploadErr);
+          }
+        }
+
+        const res = await signUp({
+          fullName: fullName.trim(),
+          phoneNumber: phone.trim(),
+          password,
+          avatarUrl,
+        });
+
+        if (res.error) {
+          setErrorMessage(res.error.message || 'Failed to create account.');
+        }
+      } else {
+        const res = await signIn(phone.trim(), password);
+        if (res.error) {
+          setErrorMessage(res.error.message || 'Phone number or password is incorrect.');
         }
       }
-
-      const res = await signUp({
-        fullName: fullName.trim(),
-        phoneNumber: phone.trim(),
-        password,
-        avatarUrl,
-      });
-
-      if (res.error) {
-        setErrorMessage(res.error.message || 'Failed to create account');
-      }
-    } else {
-      const res = await signIn(phone.trim(), password);
-      if (res.error) {
-        setErrorMessage(res.error.message || 'Invalid phone number or password');
-      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'An unexpected error occurred. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -273,10 +287,10 @@ export const AuthScreen: React.FC = () => {
             <div className="pt-2">
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isSubmitting}
                 className="w-full flex justify-center items-center py-3.5 px-4 border border-transparent rounded-full shadow-md font-semibold text-base text-on-primary bg-primary hover:bg-primary-container focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-all active:scale-[0.98] duration-150 disabled:opacity-50"
               >
-                {isLoading ? (
+                {isSubmitting ? (
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                 ) : isSignUp ? (
                   'Create Account'

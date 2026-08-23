@@ -110,9 +110,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [activeCall?.status]);
 
   const signIn = async (phone: string, pass: string): Promise<{ error: Error | null }> => {
-    setIsLoading(true);
     const res = await authService.signIn(phone, pass);
-    setIsLoading(false);
     if (res.profile && !res.error) {
       setCurrentUser(res.profile);
       await authService.setPresence(res.profile.user_id, true);
@@ -126,9 +124,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     password: string;
     avatarUrl?: string;
   }): Promise<{ error: Error | null }> => {
-    setIsLoading(true);
     const res = await authService.signUp(params);
-    setIsLoading(false);
     if (res.profile && !res.error) {
       setCurrentUser(res.profile);
       await authService.setPresence(res.profile.user_id, true);

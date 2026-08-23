@@ -13,13 +13,15 @@ function mapAuthError(err: any): Error {
   if (!err) return new Error('An unknown authentication error occurred.');
 
   const msg = (err.message || String(err)).toLowerCase();
-  const status = err.status || err.code;
+  const code = (err.code || '').toLowerCase();
+  const status = err.status;
 
   if (
     msg.includes('invalid login credentials') ||
     msg.includes('invalid_credentials') ||
     msg.includes('invalid grant') ||
-    msg.includes('invalid username or password')
+    msg.includes('invalid username or password') ||
+    code === 'invalid_credentials'
   ) {
     return new Error('Phone number or password is incorrect.');
   }
@@ -27,25 +29,48 @@ function mapAuthError(err: any): Error {
   if (
     msg.includes('user not found') ||
     msg.includes('user_not_found') ||
-    msg.includes('no user')
+    msg.includes('no user') ||
+    code === 'user_not_found'
   ) {
-    return new Error('No account was found with this phone number.');
+    return new Error('No account was found with this phone number. Please create an account.');
   }
 
   if (
     msg.includes('already registered') ||
     msg.includes('user already exists') ||
-    msg.includes('identity already exists')
+    msg.includes('identity already exists') ||
+    code === 'user_already_exists'
   ) {
     return new Error('An account with this phone number already exists. Please sign in.');
   }
 
   if (
+    msg.includes('email rate limit') ||
+    msg.includes('over_email_send_rate_limit') ||
+    code === 'over_email_send_rate_limit'
+  ) {
+    return new Error(
+      'Supabase email confirmation rate limit reached. In your Supabase Dashboard > Authentication > Providers: disable "Confirm email" under Email provider or enable the Phone provider.'
+    );
+  }
+
+  if (
+    msg.includes('phone signups are disabled') ||
+    msg.includes('phone_provider_disabled') ||
+    code === 'phone_provider_disabled'
+  ) {
+    return new Error(
+      'Phone authentication is disabled in Supabase. In Supabase Dashboard, go to Authentication > Providers and enable Phone, or disable "Confirm email" under Email.'
+    );
+  }
+
+  if (
     msg.includes('email not confirmed') ||
     msg.includes('phone not confirmed') ||
-    msg.includes('unconfirmed')
+    msg.includes('unconfirmed') ||
+    code === 'email_not_confirmed'
   ) {
-    return new Error('Account confirmation pending. Please check Supabase project settings to disable email/phone confirmation.');
+    return new Error('Account confirmation is required. In your Supabase Dashboard, please disable email/phone confirmation under Authentication > Providers.');
   }
 
   if (
@@ -61,15 +86,15 @@ function mapAuthError(err: any): Error {
     return new Error('Too many attempts. Please wait a moment and try again.');
   }
 
-  if (msg.includes('session') || msg.includes('token')) {
-    return new Error('Your session could not be created. Please try again.');
+  if (msg.includes('password') && (msg.includes('short') || msg.includes('least 6') || msg.includes('weak'))) {
+    return new Error('Password must be at least 6 characters.');
   }
 
   return new Error(err.message || 'Authentication failed. Please check your credentials.');
 }
 
 export const authService = {
-  // Sign up with Phone + Password
+  // Sign up with Phone + Password (Creates real Supabase Auth user in auth.users)
   async signUp(params: {
     fullName: string;
     phoneNumber: string;
@@ -87,18 +112,18 @@ export const authService = {
       return {
         user: null,
         profile: null,
-        error: new Error('Supabase is not configured. Please set your Supabase Project URL and Anon Key to enable global cross-device accounts.'),
+        error: new Error('Supabase is not configured.'),
       };
     }
 
     try {
-      const phoneEmail = getPhoneAuthEmail(normalizedPhone);
       let authUser: any = null;
       let authSession: any = null;
+      let lastError: any = null;
 
-      // Primary Attempt: Standard shadow email registration
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: phoneEmail,
+      // 1. First Attempt: Native Supabase Phone Signup
+      const { data: phoneSignUpData, error: phoneSignUpErr } = await supabase.auth.signUp({
+        phone: normalizedPhone,
         password,
         options: {
           data: {
@@ -109,29 +134,16 @@ export const authService = {
         },
       });
 
-      if (signUpError) {
-        const errorMsg = (signUpError.message || '').toLowerCase();
-        
-        // If user is already registered in Supabase Auth, attempt direct sign in
-        if (
-          errorMsg.includes('already registered') ||
-          errorMsg.includes('user already exists') ||
-          errorMsg.includes('identity already exists')
-        ) {
-          const signInRes = await this.signIn(normalizedPhone, password);
-          if (signInRes.profile && !signInRes.error) {
-            return signInRes;
-          }
-          return {
-            user: null,
-            profile: null,
-            error: new Error('An account with this phone number already exists. Please sign in with your password.'),
-          };
-        }
+      if (!phoneSignUpErr && phoneSignUpData?.user) {
+        authUser = phoneSignUpData.user;
+        authSession = phoneSignUpData.session;
+      } else {
+        lastError = phoneSignUpErr;
 
-        // Fallback: If native phone provider is enabled in project
-        const { data: phoneSignUpData, error: phoneSignUpErr } = await supabase.auth.signUp({
-          phone: normalizedPhone,
+        // 2. Second Attempt: Shadow email registration (maps normalized phone to phone_<digits>@vibe.chat)
+        const phoneEmail = getPhoneAuthEmail(normalizedPhone);
+        const { data: emailSignUpData, error: emailSignUpErr } = await supabase.auth.signUp({
+          email: phoneEmail,
           password,
           options: {
             data: {
@@ -142,35 +154,66 @@ export const authService = {
           },
         });
 
-        if (phoneSignUpErr) {
-          return { user: null, profile: null, error: mapAuthError(signUpError || phoneSignUpErr) };
-        }
+        if (!emailSignUpErr && emailSignUpData?.user) {
+          authUser = emailSignUpData.user;
+          authSession = emailSignUpData.session;
+        } else {
+          lastError = emailSignUpErr || phoneSignUpErr;
+          console.error('Supabase Auth SignUp failed:', {
+            code: lastError?.code,
+            message: lastError?.message,
+            status: lastError?.status,
+          });
 
-        authUser = phoneSignUpData.user;
-        authSession = phoneSignUpData.session;
-      } else {
-        authUser = signUpData.user;
-        authSession = signUpData.session;
+          // Check if user already exists
+          const errorMsg = (lastError?.message || '').toLowerCase();
+          if (
+            errorMsg.includes('already registered') ||
+            errorMsg.includes('user already exists') ||
+            errorMsg.includes('identity already exists')
+          ) {
+            const signInRes = await this.signIn(normalizedPhone, password);
+            if (signInRes.profile && !signInRes.error) {
+              return signInRes;
+            }
+            return {
+              user: null,
+              profile: null,
+              error: new Error('An account with this phone number already exists. Please sign in.'),
+            };
+          }
+
+          return { user: null, profile: null, error: mapAuthError(lastError) };
+        }
       }
 
       if (!authUser || !authUser.id) {
-        return { user: null, profile: null, error: new Error('Failed to create account. Please try again.') };
+        return {
+          user: null,
+          profile: null,
+          error: new Error('Failed to create user in Supabase Auth. Please verify your Supabase settings.'),
+        };
       }
 
-      // If signup did not automatically establish a session, try immediate sign in
+      // If signup did not automatically return a session, establish session immediately via signInWithPassword
       if (!authSession) {
-        try {
-          const { data: signInData } = await supabase.auth.signInWithPassword({
+        const phoneEmail = getPhoneAuthEmail(normalizedPhone);
+        
+        let loginAttempt = await supabase.auth.signInWithPassword({
+          phone: normalizedPhone,
+          password,
+        });
+
+        if (loginAttempt.error) {
+          loginAttempt = await supabase.auth.signInWithPassword({
             email: phoneEmail,
             password,
           });
+        }
 
-          if (signInData?.session) {
-            authSession = signInData.session;
-            authUser = signInData.user;
-          }
-        } catch (e) {
-          // Non-blocking fallback
+        if (loginAttempt.data?.session) {
+          authSession = loginAttempt.data.session;
+          authUser = loginAttempt.data.user;
         }
       }
 
@@ -186,7 +229,7 @@ export const authService = {
           fullName.toLowerCase().replace(/\s+/g, '_') + '_' + Math.floor(100 + Math.random() * 900),
         avatar_url:
           avatarUrl ||
-          `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName)}`,
+          `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fullName.trim())}`,
         about: 'Hey there! I am using Vibe.',
         is_online: true,
         last_seen: new Date().toISOString(),
@@ -194,7 +237,7 @@ export const authService = {
         updated_at: new Date().toISOString(),
       };
 
-      // Persist profile to Supabase public.profiles table
+      // Persist profile to Supabase public.profiles table using real authenticated user ID
       try {
         const { error: profileError } = await supabase
           .from('profiles')
@@ -207,22 +250,23 @@ export const authService = {
         console.warn('Profile database sync notice:', err);
       }
 
-      // Cache current profile locally for immediate and offline session resilience
+      // Cache profile locally for session resilience
       if (typeof window !== 'undefined') {
         try {
           localStorage.setItem('vibe_current_profile', JSON.stringify(newProfile));
         } catch (e) {
-          // Storage quota
+          // Ignore
         }
       }
 
       return { user: authUser, profile: newProfile, error: null };
     } catch (err: any) {
+      console.error('Sign up unexpected error:', err);
       return { user: null, profile: null, error: mapAuthError(err) };
     }
   },
 
-  // Sign in with Phone + Password
+  // Sign in with Phone + Password (Authenticates against real Supabase Auth)
   async signIn(
     phoneNumber: string,
     password: string
@@ -237,20 +281,31 @@ export const authService = {
       return {
         user: null,
         profile: null,
-        error: new Error('Supabase is not configured. Please set your Supabase Project URL and Anon Key in settings.'),
+        error: new Error('Supabase is not configured.'),
       };
     }
 
     try {
-      const phoneEmail = getPhoneAuthEmail(normalizedPhone);
-
-      // Primary login attempt with phone-mapped shadow email
+      // 1. Primary Attempt: Native Supabase Phone Sign In
       let signInResult = await supabase.auth.signInWithPassword({
-        email: phoneEmail,
+        phone: normalizedPhone,
         password,
       });
 
-      // Fallback 1: Raw digits variation
+      // 2. Second Attempt: Shadow email Sign In
+      if (signInResult.error) {
+        const phoneEmail = getPhoneAuthEmail(normalizedPhone);
+        const emailAttempt = await supabase.auth.signInWithPassword({
+          email: phoneEmail,
+          password,
+        });
+
+        if (!emailAttempt.error && emailAttempt.data?.user) {
+          signInResult = emailAttempt;
+        }
+      }
+
+      // 3. Third Attempt: Raw digits variation
       if (signInResult.error) {
         const rawDigits = phoneNumber.replace(/\D/g, '');
         if (rawDigits && rawDigits !== getPhoneDigits(normalizedPhone)) {
@@ -259,24 +314,14 @@ export const authService = {
             email: rawEmail,
             password,
           });
-          if (!rawAttempt.error && rawAttempt.data.user) {
+          if (!rawAttempt.error && rawAttempt.data?.user) {
             signInResult = rawAttempt;
           }
         }
       }
 
-      // Fallback 2: Native Supabase phone provider (if enabled in project)
-      if (signInResult.error) {
-        const phoneAttempt = await supabase.auth.signInWithPassword({
-          phone: normalizedPhone,
-          password,
-        });
-        if (!phoneAttempt.error && phoneAttempt.data.user) {
-          signInResult = phoneAttempt;
-        }
-      }
-
       if (signInResult.error || !signInResult.data?.user) {
+        console.warn('Supabase sign-in failed:', signInResult.error?.message);
         return {
           user: null,
           profile: null,
@@ -287,10 +332,10 @@ export const authService = {
       const authUser = signInResult.data.user;
       const userId = authUser.id;
 
-      // Retrieve user's profile using auth user ID from Supabase
+      // Retrieve user's profile using auth user ID from Supabase profiles table
       let profile = await this.getProfile(userId);
 
-      // If profile record is missing in database, safely create and persist it using auth metadata
+      // If profile record is missing in database, safely create and persist it using auth user metadata
       if (!profile) {
         const meta = authUser.user_metadata || {};
         const fallbackProfile: UserProfile = {
@@ -336,6 +381,7 @@ export const authService = {
 
       return { user: authUser, profile, error: null };
     } catch (err: any) {
+      console.error('Sign in unexpected error:', err);
       return { user: null, profile: null, error: mapAuthError(err) };
     }
   },
@@ -364,42 +410,14 @@ export const authService = {
         }
       }
 
-      // Fallback: Check cached persistent profile
+      // If no active session, clear any stale local profile and return null
       if (typeof window !== 'undefined') {
-        const cachedRaw = localStorage.getItem('vibe_current_profile');
-        if (cachedRaw) {
-          try {
-            const cachedProfile = JSON.parse(cachedRaw) as UserProfile;
-            if (cachedProfile && cachedProfile.user_id) {
-              // Refresh in background
-              this.getProfile(cachedProfile.user_id).then((fresh) => {
-                if (fresh) {
-                  localStorage.setItem('vibe_current_profile', JSON.stringify(fresh));
-                }
-              }).catch(() => {});
-
-              return { userId: cachedProfile.user_id, profile: cachedProfile };
-            }
-          } catch (e) {
-            localStorage.removeItem('vibe_current_profile');
-          }
-        }
+        localStorage.removeItem('vibe_current_profile');
       }
 
       return { userId: null, profile: null };
     } catch (e) {
-      // Local fallback on network error
-      if (typeof window !== 'undefined') {
-        const cachedRaw = localStorage.getItem('vibe_current_profile');
-        if (cachedRaw) {
-          try {
-            const cachedProfile = JSON.parse(cachedRaw) as UserProfile;
-            return { userId: cachedProfile.user_id, profile: cachedProfile };
-          } catch (err) {
-            // Ignore
-          }
-        }
-      }
+      console.warn('Session check error:', e);
       return { userId: null, profile: null };
     }
   },
