@@ -2,13 +2,19 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 
 export const VideoCallModal: React.FC = () => {
-  const { activeCall, endCall, toggleMute, toggleVideo, flipCamera } = useAuth();
+  const { currentUser, activeCall, endCall, toggleMute, toggleVideo, flipCamera } = useAuth();
   const [isPipSmall, setIsPipSmall] = useState(false);
 
   if (!activeCall || activeCall.type !== 'video') return null;
 
   const contact = activeCall.contact;
   const name = contact.full_name || 'Contact';
+  const remoteAvatar =
+    contact.avatar_url ||
+    `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`;
+  const myAvatar =
+    currentUser?.avatar_url ||
+    `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(currentUser?.full_name || 'Me')}`;
 
   const minutes = Math.floor(activeCall.duration / 60)
     .toString()
@@ -18,14 +24,17 @@ export const VideoCallModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-between items-center bg-black text-white font-inter select-none overflow-hidden animate-fade-in">
-      {/* Background Remote Video Feed Simulation */}
-      <div className="absolute inset-0 z-0">
-        <img
-          src="https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=1200&auto=format&fit=crop&q=80"
-          alt="Video feed"
-          className="w-full h-full object-cover opacity-90 filter brightness-95"
-        />
-        <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/80"></div>
+      {/* Background Remote Video Feed Simulation / Avatar Canvas */}
+      <div className="absolute inset-0 z-0 flex flex-col items-center justify-center bg-surface-container-lowest">
+        <div className="relative flex flex-col items-center justify-center">
+          <img
+            src={remoteAvatar}
+            alt={name}
+            className="w-32 h-32 md:w-44 md:h-44 rounded-full object-cover border-4 border-white/20 shadow-2xl animate-pulse"
+          />
+          <span className="mt-4 text-sm font-semibold text-white/80">{name}</span>
+        </div>
+        <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/80 pointer-events-none"></div>
       </div>
 
       {/* Top Bar */}
@@ -67,11 +76,13 @@ export const VideoCallModal: React.FC = () => {
             <span className="text-[10px] mt-1">Camera Off</span>
           </div>
         ) : (
-          <img
-            src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500&auto=format&fit=crop&q=80"
-            alt="My camera preview"
-            className="w-full h-full object-cover"
-          />
+          <div className="w-full h-full flex flex-col items-center justify-center bg-surface-container">
+            <img
+              src={myAvatar}
+              alt="My preview"
+              className="w-16 h-16 rounded-full object-cover border border-white/20"
+            />
+          </div>
         )}
         <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/60 text-[9px] text-white">
           You

@@ -1,9 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { chatService } from '../../services/chatService';
+import { Message } from '../../types';
 
 export const ContactInfoPanel: React.FC = () => {
   const { activeConversation, showContactInfo, setShowContactInfo } = useAuth();
   const [isMuted, setIsMuted] = useState(false);
+  const [conversationMedia, setConversationMedia] = useState<Message[]>([]);
+  const [conversationFiles, setConversationFiles] = useState<Message[]>([]);
+
+  useEffect(() => {
+    if (activeConversation?.id) {
+      chatService.getMessages(activeConversation.id, 100).then((msgs) => {
+        setConversationMedia(msgs.filter((m) => m.message_type === 'image' && m.file_url));
+        setConversationFiles(msgs.filter((m) => m.message_type === 'file' && m.file_url));
+      });
+    }
+  }, [activeConversation?.id]);
 
   if (!showContactInfo || !activeConversation) return null;
 
@@ -13,7 +26,7 @@ export const ContactInfoPanel: React.FC = () => {
     otherMember?.avatar_url ||
     activeConversation.avatar_url ||
     `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(displayName)}`;
-  const about = otherMember?.about || 'Lead Product Designer';
+  const about = otherMember?.about || 'Hey there! I am using Vibe.';
   const phone = otherMember?.phone_number || '';
 
   return (
@@ -74,73 +87,67 @@ export const ContactInfoPanel: React.FC = () => {
               {isMuted ? 'Muted' : 'Mute'}
             </span>
           </div>
-
-          <div className="flex flex-col items-center cursor-pointer group">
-            <div className="w-11 h-11 rounded-full bg-surface-container flex items-center justify-center text-primary group-hover:bg-primary-container group-hover:text-on-primary-container transition-colors mb-1">
-              <span className="material-symbols-outlined text-xl">search</span>
-            </div>
-            <span className="text-[11px] font-semibold text-on-surface-variant">Search</span>
-          </div>
         </div>
       </div>
 
       {/* Shared Media Section */}
       <div className="p-4 border-b border-outline-variant">
-        <div className="flex justify-between items-center mb-3 cursor-pointer hover:opacity-80 transition-opacity">
-          <h3 className="font-semibold text-sm text-on-surface">Shared Media</h3>
-          <div className="flex items-center gap-0.5 text-primary text-xs font-semibold">
-            View All <span className="material-symbols-outlined text-[16px]">chevron_right</span>
-          </div>
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-semibold text-sm text-on-surface">Shared Media ({conversationMedia.length})</h3>
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="aspect-square rounded-xl overflow-hidden border border-outline-variant/60 shadow-sm cursor-pointer hover:opacity-90 transition-opacity bg-surface-container">
-            <img
-              src="https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=400&auto=format&fit=crop&q=80"
-              alt="Office building architecture"
-              className="w-full h-full object-cover"
-            />
+        {conversationMedia.length === 0 ? (
+          <p className="text-xs text-on-surface-variant py-2">No photos shared in this chat yet.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+            {conversationMedia.map((m) => (
+              <a
+                key={m.id}
+                href={m.file_url!}
+                target="_blank"
+                rel="noreferrer"
+                className="aspect-square rounded-xl overflow-hidden border border-outline-variant/60 shadow-sm hover:opacity-90 transition-opacity bg-surface-container block"
+              >
+                <img
+                  src={m.file_url!}
+                  alt="Shared media"
+                  className="w-full h-full object-cover"
+                />
+              </a>
+            ))}
           </div>
-          <div className="aspect-square rounded-xl overflow-hidden border border-outline-variant/60 shadow-sm cursor-pointer hover:opacity-90 transition-opacity bg-surface-container">
-            <img
-              src="https://images.unsplash.com/photo-1497215728101-856f4ea42174?w=400&auto=format&fit=crop&q=80"
-              alt="Minimal desk setup"
-              className="w-full h-full object-cover"
-            />
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Files Section */}
       <div className="p-4">
-        <div className="flex justify-between items-center mb-3 cursor-pointer hover:opacity-80 transition-opacity">
-          <h3 className="font-semibold text-sm text-on-surface">Files &amp; Documents</h3>
-          <span className="material-symbols-outlined text-on-surface-variant text-lg">expand_more</span>
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-semibold text-sm text-on-surface">Files &amp; Documents ({conversationFiles.length})</h3>
         </div>
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-surface-container transition-colors cursor-pointer group border border-outline-variant/40">
-            <div className="w-9 h-9 bg-error-container text-on-error-container rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <span className="material-symbols-outlined text-lg">picture_as_pdf</span>
-            </div>
-            <div className="flex flex-col min-w-0 flex-1">
-              <span className="font-semibold text-xs text-on-surface truncate">
-                Brand_Guidelines_v2.pdf
-              </span>
-              <span className="text-[10px] text-on-surface-variant">2.4 MB • Today</span>
-            </div>
+        {conversationFiles.length === 0 ? (
+          <p className="text-xs text-on-surface-variant py-2">No documents shared in this chat yet.</p>
+        ) : (
+          <div className="flex flex-col gap-2 max-h-48 overflow-y-auto">
+            {conversationFiles.map((f) => (
+              <a
+                key={f.id}
+                href={f.file_url!}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-surface-container transition-colors group border border-outline-variant/40"
+              >
+                <div className="w-9 h-9 bg-secondary-container text-on-secondary-container rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <span className="material-symbols-outlined text-lg">description</span>
+                </div>
+                <div className="flex flex-col min-w-0 flex-1">
+                  <span className="font-semibold text-xs text-on-surface truncate">
+                    {f.file_name || 'Document'}
+                  </span>
+                  <span className="text-[10px] text-on-surface-variant">{f.file_size || 'File'}</span>
+                </div>
+              </a>
+            ))}
           </div>
-
-          <div className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-surface-container transition-colors cursor-pointer group border border-outline-variant/40">
-            <div className="w-9 h-9 bg-secondary-container text-on-secondary-container rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <span className="material-symbols-outlined text-lg">description</span>
-            </div>
-            <div className="flex flex-col min-w-0 flex-1">
-              <span className="font-semibold text-xs text-on-surface truncate">
-                Q3_Project_Brief.docx
-              </span>
-              <span className="text-[10px] text-on-surface-variant">1.1 MB • Yesterday</span>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

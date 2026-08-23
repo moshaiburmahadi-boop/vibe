@@ -6,24 +6,14 @@ export const StatusView: React.FC = () => {
   const [myStatusText, setMyStatusText] = useState('');
   const [showStatusModal, setShowStatusModal] = useState(false);
 
-  const statuses = [
-    {
-      id: '1',
-      name: 'Sarah Jenkins',
-      avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-      time: '32 minutes ago',
-      media: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=800',
-      caption: 'Design sprint week in Seattle! 🚀',
-    },
-    {
-      id: '2',
-      name: 'Marcus Chen',
-      avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
-      time: '2 hours ago',
-      media: 'https://images.unsplash.com/photo-1497215728101-856f4ea42174?w=800',
-      caption: 'New workspace setup completed.',
-    },
-  ];
+  const [statuses, setStatuses] = useState<Array<{
+    id: string;
+    name: string;
+    avatar: string;
+    time: string;
+    media?: string;
+    caption?: string;
+  }>>([]);
 
   const [activeStory, setActiveStory] = useState<(typeof statuses)[0] | null>(null);
 
@@ -72,27 +62,45 @@ export const StatusView: React.FC = () => {
 
         {/* Recent Updates */}
         <h2 className="font-semibold text-base text-on-surface mb-3">Recent updates</h2>
-        <div className="flex flex-col gap-3 pb-12">
-          {statuses.map((item) => (
-            <div
-              key={item.id}
-              onClick={() => setActiveStory(item)}
-              className="flex items-center gap-3.5 p-3 bg-surface rounded-2xl border border-outline-variant/60 hover:bg-surface-container-low transition-colors cursor-pointer shadow-sm"
-            >
-              <div className="w-13 h-13 p-0.5 rounded-full border-2 border-primary flex items-center justify-center">
-                <img
-                  src={item.avatar}
-                  alt={item.name}
-                  className="w-11 h-11 rounded-full object-cover"
-                />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="font-semibold text-sm text-on-surface truncate">{item.name}</h3>
-                <p className="text-xs text-on-surface-variant">{item.time}</p>
-              </div>
+        {statuses.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 px-4 text-center text-on-surface-variant bg-surface rounded-2xl border border-outline-variant/60 shadow-sm mb-12">
+            <div className="w-14 h-14 rounded-full bg-surface-container-high flex items-center justify-center mb-3 text-primary">
+              <span className="material-symbols-outlined text-2xl">motion_photos_on</span>
             </div>
-          ))}
-        </div>
+            <p className="font-semibold text-sm text-on-surface mb-1">No status updates yet</p>
+            <p className="text-xs text-on-surface-variant max-w-xs mb-4">
+              Status updates from you and your contacts will appear here and disappear after 24 hours.
+            </p>
+            <button
+              onClick={() => setShowStatusModal(true)}
+              className="px-4 py-2 rounded-full bg-primary text-on-primary text-xs font-semibold hover:bg-primary-container transition-transform active:scale-95 shadow-sm"
+            >
+              Add Status Update
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3 pb-12">
+            {statuses.map((item) => (
+              <div
+                key={item.id}
+                onClick={() => setActiveStory(item)}
+                className="flex items-center gap-3.5 p-3 bg-surface rounded-2xl border border-outline-variant/60 hover:bg-surface-container-low transition-colors cursor-pointer shadow-sm"
+              >
+                <div className="w-13 h-13 p-0.5 rounded-full border-2 border-primary flex items-center justify-center">
+                  <img
+                    src={item.avatar}
+                    alt={item.name}
+                    className="w-11 h-11 rounded-full object-cover"
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-sm text-on-surface truncate">{item.name}</h3>
+                  <p className="text-xs text-on-surface-variant">{item.time}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </main>
 
       {/* Story Viewer Modal */}

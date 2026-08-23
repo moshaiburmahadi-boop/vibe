@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { RealtimeChannel } from '@supabase/supabase-js';
 import { useAuth } from '../../context/AuthContext';
 import { chatService } from '../../services/chatService';
 import { storageService } from '../../services/storageService';
@@ -40,6 +41,7 @@ export const ActiveChatArea: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const typingChannelRef = useRef<RealtimeChannel | null>(null);
 
   const otherMember = activeConversation?.other_member;
   const conversationId = activeConversation?.id;
@@ -93,10 +95,12 @@ export const ActiveChatArea: React.FC = () => {
         }
       }
     );
+    typingChannelRef.current = typingChannel;
 
     return () => {
       realtimeService.unsubscribe(messageChannel);
       realtimeService.unsubscribe(typingChannel);
+      typingChannelRef.current = null;
     };
   }, [conversationId, currentUser, loadMessages]);
 
@@ -109,11 +113,13 @@ export const ActiveChatArea: React.FC = () => {
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputText(e.target.value);
 
-    if (conversationId && currentUser) {
-      // Send typing status
+    if (conversationId && currentUser && typingChannelRef.current) {
+      realtimeService.sendTypingStatus(typingChannelRef.current, currentUser.user_id, true);
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => {
-        // Stop typing
+        if (typingChannelRef.current && currentUser) {
+          realtimeService.sendTypingStatus(typingChannelRef.current, currentUser.user_id, false);
+        }
       }, 2000);
     }
   };
