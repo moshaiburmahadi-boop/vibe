@@ -1,6 +1,10 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Retrieve credentials from environment or persistent localStorage configuration
+export const DEFAULT_SUPABASE_URL = 'https://tsxaudwxsuzebbvjdman.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRzeGF1ZHd4c3V6ZWJidmpkbWFuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MjE2NTksImV4cCI6MjEwMjk5NzY1OX0.-W0lx_ayV1ARWHK6iXOFwrY5wbqQIsCmQ3S5lE0mzCQ';
+
+// Retrieve credentials from environment or persistent localStorage configuration, with fixed project default fallback
 const getInitialConfig = () => {
   const metaEnv = (import.meta as any).env || {};
   const envUrl = metaEnv.VITE_SUPABASE_URL || '';
@@ -9,12 +13,16 @@ const getInitialConfig = () => {
   const localUrl = typeof window !== 'undefined' ? localStorage.getItem('vibe_supabase_url') || '' : '';
   const localKey = typeof window !== 'undefined' ? localStorage.getItem('vibe_supabase_anon_key') || '' : '';
 
-  const url = localUrl || envUrl || 'https://demo-project.supabase.co';
-  const key = localKey || envKey || 'demo-anon-key-placeholder';
+  const url = localUrl || (envUrl && !envUrl.includes('your-project') ? envUrl : '') || DEFAULT_SUPABASE_URL;
+  const key = localKey || (envKey && !envKey.includes('your-anon') ? envKey : '') || DEFAULT_SUPABASE_ANON_KEY;
 
   const isConfigured = Boolean(
-    (localUrl && localKey) ||
-    (envUrl && envKey && !envUrl.includes('your-project') && !key.includes('your-anon'))
+    url &&
+    key &&
+    !url.includes('demo-project') &&
+    !key.includes('demo-anon') &&
+    !url.includes('your-project') &&
+    !key.includes('your-anon')
   );
 
   return { url, key, isConfigured };
@@ -47,8 +55,8 @@ export const getSupabaseConfig = () => {
   const localUrl = typeof window !== 'undefined' ? localStorage.getItem('vibe_supabase_url') || '' : '';
   const localKey = typeof window !== 'undefined' ? localStorage.getItem('vibe_supabase_anon_key') || '' : '';
 
-  const url = localUrl || envUrl;
-  const key = localKey || envKey;
+  const url = localUrl || (envUrl && !envUrl.includes('your-project') ? envUrl : '') || DEFAULT_SUPABASE_URL;
+  const key = localKey || (envKey && !envKey.includes('your-anon') ? envKey : '') || DEFAULT_SUPABASE_ANON_KEY;
   const isConfigured = Boolean(
     url &&
     key &&
